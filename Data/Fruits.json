@@ -1,0 +1,113 @@
+{
+  "Fruits": {
+    "Common": {
+      "Rocket": {"Price": 5000, "Robux": 50, "ImageId": "15124425041"},
+      "Spin": {"Price": 7500, "Robux": 75, "ImageId": "15123685330"},
+      "Blade": {"Price": 30000, "Robux": 150, "ImageId": "15123613404"},
+      "Spring": {"Price": 60000, "Robux": 180, "ImageId": "15123689268"},
+      "Bomb": {"Price": 80000, "Robux": 220, "ImageId": "15123595806"},
+      "Smoke": {"Price": 100000, "Robux": 250, "ImageId": "15123677932"},
+      "Spike": {"Price": 180000, "Robux": 380, "ImageId": "15124220207"}
+    },
+    "Uncommon": {
+      "Flame": {"Price": 250000, "Robux": 550, "ImageId": "121545956771325"},
+      "Sand": {"Price": 420000, "Robux": 850, "ImageId": "15123673019"},
+      "Dark": {"Price": 500000, "Robux": 950, "ImageId": "15123618591"},
+      "Eagle": {"Price": 700000, "Robux": 1200, "ImageId": "77885466312115"},
+      "Diamond": {"Price": 600000, "Robux": 1000, "ImageId": "15112600534"}
+    },
+    "Rare": {
+      "Light": {"Price": 650000, "Robux": 1100, "ImageId": "15123640714"},
+      "Rubber": {"Price": 750000, "Robux": 1200, "ImageId": "15123668008"},
+      "Ghost": {"Price": 940000, "Robux": 1275, "ImageId": "15123662036"},
+      "Magma": {"Price": 850000, "Robux": 1300, "ImageId": "15123645682"},
+      "Quake": {"Price": 1000000, "Robux": 1500, "ImageId": "15123606541"}
+    },
+    "Legendary": {
+      "Love": {"Price": 1300000, "Robux": 1700, "ImageId": "15123643097"},
+      "Spider": {"Price": 1500000, "Robux": 1800, "ImageId": "15123681598"},
+      "Creation": {"Price": 1600000, "Robux": 1850, "ImageId": "116828771482820"},
+      "Sound": {"Price": 1700000, "Robux": 1900, "ImageId": "15123679712"},
+      "Phoenix": {"Price": 1800000, "Robux": 2000, "ImageId": "15123654553"},
+      "Portal": {"Price": 1900000, "Robux": 2100, "ImageId": "15123656798"},
+      "Rumble": {"Price": 2100000, "Robux": 2100, "ImageId": "15123670514"},
+      "Pain": {"Price": 2200000, "Robux": 2350, "ImageId": "15123652069"},
+      "Blizzard": {"Price": 2400000, "Robux": 2425, "ImageId": "15123587371"},
+      "Gravity": {"Price": 2500000, "Robux": 2500, "ImageId": "15123633312"},
+      "Mammoth": {"Price": 2700000, "Robux": 2700, "ImageId": "15123648309"},
+      "T-Rex": {"Price": 2800000, "Robux": 2750, "ImageId": "15694681122"}
+    },
+    "Mythical": {
+      "Dough": {"Price": 2800000, "Robux": 2400, "ImageId": "15123624401"},
+      "Shadow": {"Price": 2900000, "Robux": 2550, "ImageId": "15123675904"},
+      "Venom": {"Price": 3000000, "Robux": 2450, "ImageId": "10773719142"},
+      "Control": {"Price": 3200000, "Robux": 2500, "ImageId": "15123616275"},
+      "Gas": {"Price": 3300000, "Robux": 2600, "ImageId": "118054805452821"},
+      "Spirit": {"Price": 3400000, "Robux": 2700, "ImageId": "11911905519"},
+      "Leopard": {"Price": 5000000, "Robux": 3000, "ImageId": "15123638064"},
+      "Yeti": {"Price": 5200000, "Robux": 3050, "ImageId": "115276580506154"},
+      "Kitsune": {"Price": 8000000, "Robux": 4000, "ImageId": "15487764876"},
+      "Dragon East": {"Price": 0, "Robux": 0, "ImageId": "95749033139458", "Unobtainable": true}
+    }
+  },
+  "FruitImageMapping": {
+    "rbxassetid://15124425041": "Rocket",
+    "rbxassetid://15123685330": "Spin",
+    "rbxassetid://15123613404": "Blade",
+    "rbxassetid://15123689268": "Spring",
+    "rbxassetid://15123595806": "Bomb",
+    "rbxassetid://15123677932": "Smoke",
+    "rbxassetid://15124220207": "Spike",
+    "rbxassetid://121545956771325": "Flame",
+    "rbxassetid://15123673019": "Sand",
+    "rbxassetid://15123618591": "Dark",
+    "rbxassetid://77885466312115": "Eagle",
+    "rbxassetid://15112600534": "Diamond",
+    "rbxassetid://15123640714": "Light",
+    "rbxassetid://15123668008": "Rubber",
+    "rbxassetid://15123662036": "Ghost",
+    "rbxassetid://15123645682": "Magma",
+    "rbxassetid://15123606541": "Quake",
+    "rbxassetid://15123643097": "Love",
+    "rbxassetid://15123681598": "Spider",
+    "rbxassetid://116828771482820": "Creation",
+    "rbxassetid://15123679712": "Sound",
+    "rbxassetid://15123654553": "Phoenix",
+    "rbxassetid://15123656798": "Portal",
+    "rbxassetid://15123670514": "Rumble",
+    "rbxassetid://15123652069": "Pain",
+    "rbxassetid://15123587371": "Blizzard",
+    "rbxassetid://15123633312": "Gravity",
+    "rbxassetid://15123648309": "Mammoth",
+    "rbxassetid://15694681122": "T-Rex",
+    "rbxassetid://15123624401": "Dough",
+    "rbxassetid://15123675904": "Shadow",
+    "rbxassetid://10773719142": "Venom",
+    "rbxassetid://15123616275": "Control",
+    "rbxassetid://118054805452821": "Gas",
+    "rbxassetid://11911905519": "Spirit",
+    "rbxassetid://15123638064": "Leopard",
+    "rbxassetid://115276580506154": "Yeti",
+    "rbxassetid://15487764876": "Kitsune",
+    "rbxassetid://95749033139458": "Dragon East"
+  },
+  "TierList": {
+    "S": ["Leopard", "Kitsune", "Spirit", "Dough", "Venom", "Control"],
+    "A": ["Shadow", "Gas", "Phoenix", "Rumble", "Gravity", "Mammoth", "T-Rex"],
+    "B": ["Portal", "Pain", "Blizzard", "Sound", "Creation", "Quake"],
+    "C": ["Magma", "Light", "Rubber", "Ghost", "Love", "Spider"],
+    "D": ["Diamond", "Dark", "Sand", "Flame", "Eagle"],
+    "F": ["Spike", "Smoke", "Bomb", "Spring", "Blade", "Spin", "Rocket"]
+  },
+  "AwakeningCosts": {
+    "Flame": [500, 750, 1000, 1500, 2000],
+    "Sand": [500, 750, 1000, 1500, 2000],
+    "Dark": [500, 750, 1000, 1500, 2000],
+    "Light": [1000, 1500, 2000, 2500, 3000],
+    "Rumble": [1500, 2000, 2500, 3000, 3500],
+    "Magma": [1500, 2000, 2500, 3000, 3500],
+    "Quake": [1500, 2000, 2500, 3000, 3500],
+    "Phoenix": [2000, 2500, 3000, 3500, 4000],
+    "Dough": [2500, 3000, 3500, 4000, 5000]
+  }
+}
