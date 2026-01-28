@@ -1,7 +1,7 @@
 --[[
     Combat.lua
     Attack logic and skill management
-    Handles auto-attack, skill rotation, and target management
+    Uses M1 clicks, hitbox expansion, and proper targeting
 ]]
 
 local Combat = {}
@@ -12,20 +12,16 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
-local SKILL_KEYS = {"Z", "X", "C", "V", "F"}
+local SKILL_KEYS = {Enum.KeyCode.Z, Enum.KeyCode.X, Enum.KeyCode.C, Enum.KeyCode.V, Enum.KeyCode.F}
+local HAKI_KEY = Enum.KeyCode.J
 local SKILL_COOLDOWN = 0.5
-local ATTACK_RANGE = {
-    ["Blox Fruit"] = 35,
-    ["Melee"] = 40,
-    ["Sword"] = 40,
-    ["Gun"] = 200
-}
+local ATTACK_COOLDOWN = 0.1
+local HITBOX_SIZE = 50
 
 function Combat.new(config)
     local self = setmetatable({}, Combat)
@@ -35,15 +31,10 @@ function Combat.new(config)
     self.target = nil
     self.lastAttackTime = 0
     self.lastSkillTime = {}
+    self.lastHakiTime = 0
     self.attackConnection = nil
-    self.skillConnections = {}
-    self.priorities = {
-        QuestTarget = 10,
-        Boss = 8,
-        EliteMob = 7,
-        RegularMob = 5,
-        Player = 3
-    }
+    self.expandedHitboxes = {}
+    self.originalSizes = {}
 
     -- Initialize skill cooldowns
     for _, key in ipairs(SKILL_KEYS) do
@@ -68,17 +59,17 @@ end
 
 -- Check if entity is alive
 local function IsAlive(entity)
-    if not entity then return false end
+    if not entity or not entity.Parent then return false end
 
     local humanoid = entity:FindFirstChild("Humanoid")
-    if humanoid and humanoid.Health > 0 then
-        return true
+    if humanoid then
+        return humanoid.Health > 0
     end
 
     -- Check for NPC health value
     local health = entity:FindFirstChild("Health")
-    if health and health:IsA("NumberValue") and health.Value > 0 then
-        return true
+    if health and health:IsA("NumberValue") then
+        return health.Value > 0
     end
 
     return false
@@ -97,113 +88,127 @@ local function GetDistance(entity)
     return (rootPart.Position - targetPart.Position).Magnitude
 end
 
--- Check if entity is a valid target
-function Combat:IsValidTarget(entity)
-    if not entity or not entity.Parent then return false end
-    if not IsAlive(entity) then return false end
+-- Perform M1 attack (mouse click)
+function Combat:Attack()
+    local now = tick()
+    if now - self.lastAttackTime < ATTACK_COOLDOWN then return end
 
-    local character = GetCharacter()
-    if entity == character then return false end
+    -- Simulate left mouse click
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+    task.wait()
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
 
-    -- Check team (for players)
-    local player = Players:GetPlayerFromCharacter(entity)
-    if player then
-        if self.config and not self.config:Get("Combat", "AttackPlayers") then
-            return false
-        end
-        if player.Team == LocalPlayer.Team then
-            return false
-        end
+    self.lastAttackTime = now
+end
+
+-- Use a skill by key
+function Combat:UseSkill(keyCode)
+    local now = tick()
+    local cooldown = self.config and self.config:Get("Combat", "SkillCooldown") or SKILL_COOLDOWN
+
+    if now - (self.lastSkillTime[keyCode] or 0) < cooldown then
+        return false
     end
 
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    task.wait()
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+
+    self.lastSkillTime[keyCode] = now
     return true
 end
 
--- Get target priority
-function Combat:GetTargetPriority(entity, questTarget)
-    if not entity then return 0 end
+-- Use all available skills
+function Combat:UseAllSkills(targetPosition)
+    if not self.config then return end
 
-    local name = entity.Name
+    local skillsEnabled = self.config:Get("Combat", "SkillsEnabled") or
+                         {Z = true, X = true, C = false, V = false, F = false}
 
-    -- Quest target has highest priority
-    if questTarget and name == questTarget then
-        return self.priorities.QuestTarget
+    for i, keyCode in ipairs(SKILL_KEYS) do
+        local keyName = keyCode.Name
+        if skillsEnabled[keyName] then
+            self:UseSkill(keyCode)
+            task.wait(0.1)
+        end
     end
-
-    -- Boss detection
-    if entity:GetAttribute("IsBoss") or entity:GetAttribute("RaidBoss") then
-        return self.priorities.Boss
-    end
-
-    -- Player detection
-    if Players:GetPlayerFromCharacter(entity) then
-        return self.priorities.Player
-    end
-
-    -- Check for elite mobs (usually have special attributes)
-    if entity:GetAttribute("IsElite") or string.find(name, "Elite") then
-        return self.priorities.EliteMob
-    end
-
-    return self.priorities.RegularMob
 end
 
--- Find closest enemy
-function Combat:FindClosestEnemy(questTarget, maxDistance)
-    maxDistance = maxDistance or 200
-    local character, _, rootPart = GetCharacter()
-    if not rootPart then return nil end
+-- Enable Haki (Buso) by pressing J or E
+function Combat:EnableHaki()
+    local now = tick()
+    if now - self.lastHakiTime < 1 then return end
 
-    local closest = nil
-    local closestDistance = maxDistance
-    local closestPriority = 0
+    local character = GetCharacter()
+    if not character then return end
 
-    -- Check Enemies folder
-    local enemies = Workspace:FindFirstChild("Enemies")
-    if enemies then
-        for _, enemy in pairs(enemies:GetChildren()) do
-            if self:IsValidTarget(enemy) then
-                local distance = GetDistance(enemy)
-                local priority = self:GetTargetPriority(enemy, questTarget)
+    -- Check if already has haki enabled
+    if character:FindFirstChild("HasBuso") then return end
 
-                -- Prioritize quest targets, then distance
-                if priority > closestPriority or
-                   (priority == closestPriority and distance < closestDistance) then
-                    closest = enemy
-                    closestDistance = distance
-                    closestPriority = priority
-                end
+    -- Press J key for Haki
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.J, false, game)
+    task.wait()
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.J, false, game)
+
+    self.lastHakiTime = now
+end
+
+-- Expand hitbox of an enemy
+function Combat:ExpandHitbox(enemy)
+    if not enemy then return end
+    if self.expandedHitboxes[enemy] then return end
+
+    local hitboxSize = self.config and self.config:Get("Combat", "HitboxSize") or HITBOX_SIZE
+
+    for _, part in pairs(enemy:GetDescendants()) do
+        if part:IsA("BasePart") then
+            -- Store original size
+            if not self.originalSizes[part] then
+                self.originalSizes[part] = part.Size
             end
+
+            -- Expand the part
+            pcall(function()
+                part.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                part.Transparency = 1
+                part.CanCollide = false
+            end)
         end
     end
 
-    -- Check Characters folder (for PvP)
-    if self.config and self.config:Get("Combat", "AttackPlayers") then
-        local characters = Workspace:FindFirstChild("Characters")
-        if characters then
-            for _, char in pairs(characters:GetChildren()) do
-                if self:IsValidTarget(char) then
-                    local distance = GetDistance(char)
-                    local priority = self:GetTargetPriority(char, questTarget)
+    self.expandedHitboxes[enemy] = true
+end
 
-                    if priority > closestPriority or
-                       (priority == closestPriority and distance < closestDistance) then
-                        closest = char
-                        closestDistance = distance
-                        closestPriority = priority
-                    end
-                end
-            end
+-- Restore hitbox of an enemy
+function Combat:RestoreHitbox(enemy)
+    if not enemy then return end
+    if not self.expandedHitboxes[enemy] then return end
+
+    for _, part in pairs(enemy:GetDescendants()) do
+        if part:IsA("BasePart") and self.originalSizes[part] then
+            pcall(function()
+                part.Size = self.originalSizes[part]
+            end)
         end
     end
 
-    return closest, closestDistance
+    self.expandedHitboxes[enemy] = nil
 end
 
--- Find enemy by name
+-- Set current target
+function Combat:SetTarget(target)
+    self.target = target
+end
+
+-- Get current target
+function Combat:GetTarget()
+    return self.target
+end
+
+-- Find closest enemy by name
 function Combat:FindEnemyByName(enemyName, maxDistance)
     maxDistance = maxDistance or 500
-    local character, _, rootPart = GetCharacter()
+    local _, _, rootPart = GetCharacter()
     if not rootPart then return nil end
 
     local enemies = Workspace:FindFirstChild("Enemies")
@@ -213,7 +218,7 @@ function Combat:FindEnemyByName(enemyName, maxDistance)
     local closestDistance = maxDistance
 
     for _, enemy in pairs(enemies:GetChildren()) do
-        if enemy.Name == enemyName and self:IsValidTarget(enemy) then
+        if enemy.Name == enemyName and IsAlive(enemy) then
             local distance = GetDistance(enemy)
             if distance < closestDistance then
                 closest = enemy
@@ -225,92 +230,42 @@ function Combat:FindEnemyByName(enemyName, maxDistance)
     return closest, closestDistance
 end
 
--- Get equipped tool info
-function Combat:GetEquippedTool()
-    local character = GetCharacter()
-    if not character then return nil, nil end
+-- Find any closest enemy
+function Combat:FindClosestEnemy(maxDistance)
+    maxDistance = maxDistance or 200
+    local _, _, rootPart = GetCharacter()
+    if not rootPart then return nil end
 
-    local tool = character:FindFirstChildOfClass("Tool")
-    if tool then
-        return tool, tool.ToolTip or "Unknown"
-    end
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
 
-    return nil, nil
-end
+    local closest = nil
+    local closestDistance = maxDistance
 
--- Get attack range for current weapon
-function Combat:GetAttackRange()
-    local tool, toolType = self:GetEquippedTool()
-    return ATTACK_RANGE[toolType] or 50
-end
-
--- Perform basic attack (click)
-function Combat:Attack()
-    local now = tick()
-    if now - self.lastAttackTime < 0.1 then return end
-
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
-
-    self.lastAttackTime = now
-end
-
--- Use a skill by key
-function Combat:UseSkill(key)
-    local now = tick()
-    local cooldown = self.config and self.config:Get("Combat", "SkillCooldown") or SKILL_COOLDOWN
-
-    if now - (self.lastSkillTime[key] or 0) < cooldown then
-        return false
-    end
-
-    VirtualInputManager:SendKeyEvent(true, key, false, game)
-    VirtualInputManager:SendKeyEvent(false, key, false, game)
-
-    self.lastSkillTime[key] = now
-    return true
-end
-
--- Use all available skills
-function Combat:UseAllSkills()
-    local skillsEnabled = self.config and self.config:Get("Combat", "SkillsEnabled") or
-                         {Z = true, X = true, C = false, V = false, F = false}
-
-    for _, key in ipairs(SKILL_KEYS) do
-        if skillsEnabled[key] then
-            self:UseSkill(key)
+    for _, enemy in pairs(enemies:GetChildren()) do
+        if IsAlive(enemy) then
+            local distance = GetDistance(enemy)
+            if distance < closestDistance then
+                closest = enemy
+                closestDistance = distance
+            end
         end
     end
+
+    return closest, closestDistance
 end
 
--- Enable auto haki (buso)
-function Combat:EnableHaki()
-    local character = GetCharacter()
-    if not character then return end
+-- Get target root part position
+function Combat:GetTargetPosition()
+    if not self.target then return nil end
 
-    -- Check if already has haki enabled
-    if character:FindFirstChild("HasBuso") then return end
-
-    -- Try to enable haki
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then
-            pcall(function()
-                commF:InvokeServer("Buso")
-            end)
-        end
+    local targetPart = self.target:FindFirstChild("HumanoidRootPart") or
+                       self.target:FindFirstChild("Torso")
+    if targetPart then
+        return targetPart.Position
     end
-end
 
--- Set current target
-function Combat:SetTarget(target)
-    self.target = target
-end
-
--- Get current target
-function Combat:GetTarget()
-    return self.target
+    return nil
 end
 
 -- Start auto combat loop
@@ -329,19 +284,27 @@ function Combat:Start(questTarget)
             self:EnableHaki()
         end
 
-        -- Find target if not set or invalid
-        if not self.target or not self:IsValidTarget(self.target) then
-            self.target = self:FindClosestEnemy(questTarget)
+        -- Find target if not set or dead
+        if not self.target or not IsAlive(self.target) then
+            if questTarget then
+                self.target = self:FindEnemyByName(questTarget)
+            else
+                self.target = self:FindClosestEnemy()
+            end
         end
 
         if not self.target then return end
 
         local distance = GetDistance(self.target)
-        local attackRange = self:GetAttackRange()
 
-        -- Only attack if in range
-        if distance <= attackRange then
-            -- Auto attack
+        -- Expand hitbox if close enough
+        if distance <= 100 then
+            self:ExpandHitbox(self.target)
+        end
+
+        -- Attack if in range
+        if distance <= 50 then
+            -- Auto attack with M1
             if self.config and self.config:Get("Combat", "AutoAttack") then
                 self:Attack()
             end
@@ -363,33 +326,18 @@ function Combat:Stop()
         self.attackConnection:Disconnect()
         self.attackConnection = nil
     end
+
+    -- Restore all hitboxes
+    for enemy, _ in pairs(self.expandedHitboxes) do
+        self:RestoreHitbox(enemy)
+    end
+    self.expandedHitboxes = {}
+    self.originalSizes = {}
 end
 
 -- Check if combat is active
 function Combat:IsActive()
     return self.enabled
-end
-
--- Check if target is in range
-function Combat:IsTargetInRange(target)
-    target = target or self.target
-    if not target then return false end
-
-    local distance = GetDistance(target)
-    return distance <= self:GetAttackRange()
-end
-
--- Get target position (for navigation)
-function Combat:GetTargetPosition()
-    if not self.target then return nil end
-
-    local targetPart = self.target:FindFirstChild("HumanoidRootPart") or
-                       self.target:FindFirstChild("Torso")
-    if targetPart then
-        return targetPart.Position
-    end
-
-    return nil
 end
 
 -- Cleanup

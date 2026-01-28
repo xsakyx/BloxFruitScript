@@ -16,7 +16,8 @@ local CollectionService = game:GetService("CollectionService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
-local UPDATE_INTERVAL = 0.1
+local UPDATE_INTERVAL = 0.5 -- Increased to prevent crashes
+local MAX_ESP_OBJECTS = 50 -- Limit max ESP objects
 local DEFAULT_COLORS = {
     Player = Color3.fromRGB(255, 0, 0),
     Mob = Color3.fromRGB(255, 255, 0),
@@ -90,6 +91,11 @@ end
 -- Create billboard GUI for ESP
 function ESP:CreateBillboard(entity, text, color, entityType)
     if not entity then return nil end
+
+    -- Check limit
+    if self:GetESPCount() >= MAX_ESP_OBJECTS then
+        return nil
+    end
 
     -- Find attachment point
     local adornee = entity:FindFirstChild("HumanoidRootPart") or
@@ -390,6 +396,15 @@ function ESP:Cleanup()
     end
 end
 
+-- Count ESP objects
+function ESP:GetESPCount()
+    local count = 0
+    for _ in pairs(self.espObjects) do
+        count = count + 1
+    end
+    return count
+end
+
 -- Start ESP
 function ESP:Start()
     if self.enabled then return end
@@ -404,12 +419,20 @@ function ESP:Start()
         end
         self.lastUpdate = now
 
-        -- Update all ESP types
-        self:UpdatePlayerESP()
-        self:UpdateMobESP()
-        self:UpdateFruitESP()
-        self:UpdateChestESP()
-        self:Cleanup()
+        -- Wrap in pcall to prevent crashes
+        pcall(function()
+            -- Check if we have too many ESP objects
+            if self:GetESPCount() >= MAX_ESP_OBJECTS then
+                self:Cleanup()
+            end
+
+            -- Update all ESP types (with pcall for safety)
+            pcall(function() self:UpdatePlayerESP() end)
+            pcall(function() self:UpdateMobESP() end)
+            pcall(function() self:UpdateFruitESP() end)
+            pcall(function() self:UpdateChestESP() end)
+            pcall(function() self:Cleanup() end)
+        end)
     end)
 end
 

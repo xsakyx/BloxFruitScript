@@ -24,9 +24,11 @@ local Config
 
 -- Constants
 local QUEST_TURN_IN_DISTANCE = 15
-local MOB_BRING_DISTANCE = 80
+local MOB_BRING_DISTANCE = 100
 local MOB_SEARCH_RADIUS = 500
 local QUEST_CHECK_INTERVAL = 1
+local FLY_HEIGHT = 15 -- Height above mobs when attacking
+local ATTACK_RANGE = 50
 
 function AutoFarm.new(config, teleport, combat, stateManager)
     local self = setmetatable({}, AutoFarm)
@@ -288,35 +290,71 @@ function AutoFarm:FindEnemy(mobName)
     return closest, closestDistance
 end
 
--- Bring mobs towards player
-function AutoFarm:BringMobs(mobName)
-    if not self.config or not self.config:Get("General", "BringMobs") then
-        return
-    end
-
+-- Bring mobs towards player (continuous)
+function AutoFarm:BringMobs(mobName, targetPosition)
     local enemies = Workspace:FindFirstChild("Enemies")
-    if not enemies then return end
+    if not enemies then return 0 end
 
-    local character, _, rootPart = GetCharacter()
-    if not rootPart then return end
-
-    local bringDistance = self.config:Get("General", "BringDistance") or MOB_BRING_DISTANCE
+    local bringDistance = self.config and self.config:Get("General", "BringDistance") or MOB_BRING_DISTANCE
+    local broughtCount = 0
 
     for _, enemy in pairs(enemies:GetChildren()) do
         if enemy.Name == mobName then
             local humanoid = enemy:FindFirstChild("Humanoid")
             if humanoid and humanoid.Health > 0 then
-                local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+                local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChild("Torso")
                 if enemyRoot then
-                    local distance = (rootPart.Position - enemyRoot.Position).Magnitude
-                    if distance <= bringDistance and distance > 5 then
-                        -- Move enemy to player position
-                        enemyRoot.CFrame = rootPart.CFrame + Vector3.new(0, 0, 5)
+                    -- Check if within bring distance from spawn
+                    local distance = targetPosition and (enemyRoot.Position - targetPosition).Magnitude or math.huge
+                    if distance <= bringDistance then
+                        -- Move enemy below player (player is above)
+                        pcall(function()
+                            enemyRoot.CFrame = CFrame.new(targetPosition) * CFrame.new(math.random(-3, 3), 0, math.random(-3, 3))
+                            enemyRoot.Velocity = Vector3.new(0, 0, 0)
+                            enemyRoot.Anchored = false
+                        end)
+                        broughtCount = broughtCount + 1
                     end
                 end
             end
         end
     end
+
+    return broughtCount
+end
+
+-- Keep player flying above target position
+function AutoFarm:FlyAbove(targetPosition)
+    local character, humanoid, rootPart = GetCharacter()
+    if not rootPart then return end
+
+    local flyPos = targetPosition + Vector3.new(0, FLY_HEIGHT, 0)
+
+    -- Use BodyPosition or CFrame to stay above
+    pcall(function()
+        rootPart.CFrame = CFrame.new(flyPos) * CFrame.Angles(math.rad(-90), 0, 0)
+        rootPart.Velocity = Vector3.new(0, 0, 0)
+    end)
+end
+
+-- Get spawn position for current quest mob
+function AutoFarm:GetMobFarmPosition(mobName)
+    -- First try to find an alive mob
+    local enemy = self:FindEnemy(mobName)
+    if enemy then
+        local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChild("Torso")
+        if enemyRoot then
+            return enemyRoot.Position
+        end
+    end
+
+    -- Otherwise use spawn location
+    local spawnCFrame = self:GetMobSpawnLocation(mobName)
+    if spawnCFrame then
+        return spawnCFrame.Position
+    end
+
+    return nil
 end
 
 -- Main farm state handlers
@@ -371,28 +409,38 @@ function AutoFarm:HandleQuestingState()
         end
     end
 
-    -- Find and fight mobs
+    -- Find and fight mobs - go directly to combat state
     local enemy, distance = self:FindEnemy(self.currentMobName)
     if enemy then
-        if distance > 50 then
-            -- Navigate to mob
-            self.stateManager:SetState(self.stateManager:GetStates().NAVIGATING, {
-                target = "mob",
-                mobName = self.currentMobName
-            })
-        else
-            -- In range, combat
-            self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
-                target = enemy,
-                mobName = self.currentMobName
-            })
-        end
-    else
-        -- Navigate to mob spawn location
-        self.stateManager:SetState(self.stateManager:GetStates().NAVIGATING, {
-            target = "mobSpawn",
+        -- Go directly to combat (we fly to them)
+        self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
+            target = enemy,
             mobName = self.currentMobName
         })
+    else
+        -- No enemies found, navigate to spawn location first
+        local spawnCFrame = self:GetMobSpawnLocation(self.currentMobName)
+        if spawnCFrame then
+            -- Tween to spawn location then combat
+            local character, _, rootPart = GetCharacter()
+            if rootPart then
+                local dist = (rootPart.Position - spawnCFrame.Position).Magnitude
+                if dist > 100 then
+                    -- Far away, need to tween
+                    self.stateManager:SetState(self.stateManager:GetStates().NAVIGATING, {
+                        target = "mobSpawn",
+                        mobName = self.currentMobName
+                    })
+                else
+                    -- Close enough, wait for respawn or go to combat
+                    self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
+                        mobName = self.currentMobName
+                    })
+                end
+            end
+        else
+            warn("[AutoFarm] Could not find spawn for:", self.currentMobName)
+        end
     end
 end
 
@@ -470,22 +518,83 @@ end
 
 function AutoFarm:HandleCombatState()
     local data = self.stateManager:GetStateData()
+    local mobName = data.mobName
 
-    -- Start combat module
-    self.combat:Start(data.mobName)
+    -- Get farm position (where mobs spawn or where the closest mob is)
+    local farmPosition = self:GetMobFarmPosition(mobName)
+    if not farmPosition then
+        -- No mobs found, go back to questing
+        self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
+        return
+    end
 
-    -- Bring mobs if enabled
-    self:BringMobs(data.mobName)
+    -- Fly above the farm position
+    self:FlyAbove(farmPosition)
 
-    -- Check if target is dead or gone
-    local enemy = self:FindEnemy(data.mobName)
-    if not enemy then
-        self.combat:Stop()
+    -- Bring all nearby mobs to center (below player)
+    local bringEnabled = not self.config or self.config:Get("General", "BringMobs") ~= false
+    if bringEnabled then
+        self:BringMobs(mobName, farmPosition)
+    end
 
-        if self.callbacks.onMobKill then
-            self.callbacks.onMobKill(data.mobName)
+    -- Expand hitboxes of nearby enemies
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if enemies then
+        for _, enemy in pairs(enemies:GetChildren()) do
+            if enemy.Name == mobName then
+                local humanoid = enemy:FindFirstChild("Humanoid")
+                if humanoid and humanoid.Health > 0 then
+                    -- Expand hitbox using Combat module
+                    self.combat:ExpandHitbox(enemy)
+                    -- Set as target for combat
+                    self.combat:SetTarget(enemy)
+                end
+            end
+        end
+    end
+
+    -- Enable Haki if configured
+    if self.config and self.config:Get("Combat", "AutoHaki") then
+        self.combat:EnableHaki()
+    end
+
+    -- Perform M1 attack
+    if self.config and self.config:Get("Combat", "AutoAttack") ~= false then
+        self.combat:Attack()
+    end
+
+    -- Use skills if configured
+    if self.config and self.config:Get("Combat", "AutoSkills") then
+        self.combat:UseAllSkills()
+    end
+
+    -- Check if any enemies are still alive
+    local anyAlive = false
+    if enemies then
+        for _, enemy in pairs(enemies:GetChildren()) do
+            if enemy.Name == mobName then
+                local humanoid = enemy:FindFirstChild("Humanoid")
+                if humanoid and humanoid.Health > 0 then
+                    anyAlive = true
+                    break
+                end
+            end
+        end
+    end
+
+    -- If no enemies alive, check quest progress
+    if not anyAlive then
+        -- Restore hitboxes
+        for _, enemy in pairs(enemies:GetChildren()) do
+            self.combat:RestoreHitbox(enemy)
         end
 
+        if self.callbacks.onMobKill then
+            self.callbacks.onMobKill(mobName)
+        end
+
+        -- Small delay before checking quest
+        task.wait(0.3)
         self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
     end
 end

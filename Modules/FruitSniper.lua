@@ -17,9 +17,10 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
-local FRUIT_SCAN_INTERVAL = 0.5
+local FRUIT_SCAN_INTERVAL = 2 -- Increased to prevent crashes
 local FRUIT_COLLECT_DISTANCE = 10
-local SERVER_HOP_DELAY = 5
+local SERVER_HOP_DELAY = 30 -- Increased delay before hopping
+local MAX_SCAN_DEPTH = 100 -- Limit scan depth
 
 -- Fruit image to name mapping
 local FruitImageMapping = {
@@ -199,62 +200,94 @@ function FruitSniper:ShouldCollectFruit(fruitName)
     return true
 end
 
--- Scan workspace for fruits
+-- Scan workspace for fruits (optimized)
 function FruitSniper:ScanForFruits()
     local fruits = {}
 
-    -- Common fruit spawn locations/containers
-    local containers = {
-        Workspace,
-        Workspace:FindFirstChild("Fruits"),
-        Workspace:FindFirstChild("FruitSpawns"),
-        Workspace:FindFirstChild("Map")
-    }
+    local success, err = pcall(function()
+        -- Only scan specific fruit containers (not entire workspace)
+        local containers = {
+            Workspace:FindFirstChild("Fruits"),
+            Workspace:FindFirstChild("FruitSpawns")
+        }
 
-    for _, container in pairs(containers) do
-        if container then
-            for _, obj in pairs(container:GetDescendants()) do
-                -- Check if it's a fruit
-                local isFruit = false
-                local fruitObj = obj
+        -- Also check direct children of workspace for "Fruit " models
+        for _, child in pairs(Workspace:GetChildren()) do
+            if child.Name == "Fruit " or child.Name == "Fruit" then
+                local fruitName = self:IdentifyFruit(child)
+                local position = child:GetPivot().Position
 
-                if obj.Name == "Fruit " or obj.Name == "Fruit" then
-                    isFruit = true
-                elseif obj.Name:find("Fruit") and obj:IsA("Model") then
-                    isFruit = true
-                elseif obj:IsA("Tool") and obj.ToolTip == "Fruit" then
-                    isFruit = true
-                    fruitObj = obj
+                if fruitName and not self.collectedFruits[child] then
+                    table.insert(fruits, {
+                        Object = child,
+                        Name = fruitName,
+                        Tier = self:GetFruitTier(fruitName),
+                        Position = position,
+                        Distance = GetDistance(position)
+                    })
                 end
+            end
+        end
 
-                if isFruit and fruitObj then
-                    local fruitName = self:IdentifyFruit(fruitObj)
-                    local position = fruitObj:GetPivot().Position
+        -- Scan containers
+        for _, container in pairs(containers) do
+            if container then
+                local scanned = 0
+                for _, obj in pairs(container:GetChildren()) do
+                    if scanned >= MAX_SCAN_DEPTH then break end
+                    scanned = scanned + 1
 
-                    if fruitName and not self.collectedFruits[fruitObj] then
-                        table.insert(fruits, {
-                            Object = fruitObj,
-                            Name = fruitName,
-                            Tier = self:GetFruitTier(fruitName),
-                            Position = position,
-                            Distance = GetDistance(position)
-                        })
+                    -- Check if it's a fruit
+                    local isFruit = false
+                    local fruitObj = obj
+
+                    if obj.Name == "Fruit " or obj.Name == "Fruit" then
+                        isFruit = true
+                    elseif obj.Name:find("Fruit") and obj:IsA("Model") then
+                        isFruit = true
+                    elseif obj:IsA("Tool") and obj.ToolTip == "Fruit" then
+                        isFruit = true
+                        fruitObj = obj
+                    end
+
+                    if isFruit and fruitObj then
+                        local fruitName = self:IdentifyFruit(fruitObj)
+                        local posSuccess, position = pcall(function()
+                            return fruitObj:GetPivot().Position
+                        end)
+
+                        if posSuccess and fruitName and not self.collectedFruits[fruitObj] then
+                            table.insert(fruits, {
+                                Object = fruitObj,
+                                Name = fruitName,
+                                Tier = self:GetFruitTier(fruitName),
+                                Position = position,
+                                Distance = GetDistance(position)
+                            })
+                        end
                     end
                 end
             end
         end
+    end)
+
+    if not success then
+        warn("[FruitSniper] Scan error:", err)
+        return {}
     end
 
     -- Sort by tier (mythical first) then distance
-    table.sort(fruits, function(a, b)
-        local tierOrder = {Mythical = 1, Legendary = 2, Rare = 3, Uncommon = 4, Common = 5, Unknown = 6}
-        local tierA = tierOrder[a.Tier] or 6
-        local tierB = tierOrder[b.Tier] or 6
+    pcall(function()
+        table.sort(fruits, function(a, b)
+            local tierOrder = {Mythical = 1, Legendary = 2, Rare = 3, Uncommon = 4, Common = 5, Unknown = 6}
+            local tierA = tierOrder[a.Tier] or 6
+            local tierB = tierOrder[b.Tier] or 6
 
-        if tierA ~= tierB then
-            return tierA < tierB
-        end
-        return a.Distance < b.Distance
+            if tierA ~= tierB then
+                return tierA < tierB
+            end
+            return a.Distance < b.Distance
+        end)
     end)
 
     return fruits
@@ -362,6 +395,7 @@ function FruitSniper:Start()
 
     self.foundFruits = {}
     self.collectedFruits = {}
+    self.noFruitCount = 0 -- Track consecutive scans with no fruits
 
     self.scanLoop = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
@@ -372,42 +406,54 @@ function FruitSniper:Start()
         end
         self.lastScanTime = now
 
-        -- Scan for fruits
-        local fruits = self:ScanForFruits()
+        -- Wrap in pcall for safety
+        pcall(function()
+            -- Scan for fruits
+            local fruits = self:ScanForFruits()
 
-        -- Process found fruits
-        for _, fruitData in ipairs(fruits) do
-            -- Check if already processing
-            if self.foundFruits[fruitData.Object] then
-                continue
+            -- Process found fruits
+            for _, fruitData in ipairs(fruits) do
+                -- Check if already processing
+                if self.foundFruits[fruitData.Object] then
+                    continue
+                end
+
+                -- Check if should collect
+                if not self:ShouldCollectFruit(fruitData.Name) then
+                    continue
+                end
+
+                -- Mark as found
+                self.foundFruits[fruitData.Object] = true
+
+                -- Fire callback
+                if self.callbacks.onFruitFound then
+                    pcall(self.callbacks.onFruitFound, fruitData.Name, fruitData.Tier, fruitData.Distance)
+                end
+
+                -- Collect if auto-collect enabled
+                if self.config and self.config:Get("FruitSniper", "AutoCollect") then
+                    self:CollectFruit(fruitData)
+                    self.noFruitCount = 0
+                    return -- Only collect one at a time
+                end
             end
 
-            -- Check if should collect
-            if not self:ShouldCollectFruit(fruitData.Name) then
-                continue
-            end
+            -- Server hop if no fruits for multiple scans and enabled
+            if #fruits == 0 then
+                self.noFruitCount = self.noFruitCount + 1
 
-            -- Mark as found
-            self.foundFruits[fruitData.Object] = true
-
-            -- Fire callback
-            if self.callbacks.onFruitFound then
-                self.callbacks.onFruitFound(fruitData.Name, fruitData.Tier, fruitData.Distance)
+                -- Only hop after 5 consecutive empty scans (10 seconds)
+                if self.noFruitCount >= 5 and self.config and self.config:Get("FruitSniper", "ServerHop") then
+                    if not self.teleport:IsTweening() then
+                        self.noFruitCount = 0
+                        self:ServerHop()
+                    end
+                end
+            else
+                self.noFruitCount = 0
             end
-
-            -- Collect if auto-collect enabled
-            if self.config and self.config:Get("FruitSniper", "AutoCollect") then
-                self:CollectFruit(fruitData)
-                return -- Only collect one at a time
-            end
-        end
-
-        -- Server hop if no fruits and enabled
-        if #fruits == 0 and self.config and self.config:Get("FruitSniper", "ServerHop") then
-            if not self.teleport:IsTweening() then
-                self:ServerHop()
-            end
-        end
+        end)
     end)
 end
 

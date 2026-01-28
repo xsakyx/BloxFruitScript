@@ -311,40 +311,82 @@ function Misc:GetOwnedFruits()
     return fruits
 end
 
--- Travel to sea
+-- Travel to sea using multiple methods
 function Misc:TravelToSea(seaNumber)
     local currentSea = self:GetCurrentSea()
     if currentSea == seaNumber then return true end
 
-    -- Use in-game server browser
+    -- Sea place IDs
+    local seaPlaceIds = {
+        [1] = 2753915549,
+        [2] = 4442272183,
+        [3] = 7449423635
+    }
+
+    local targetPlaceId = seaPlaceIds[seaNumber]
+    if not targetPlaceId then return false end
+
+    -- Method 1: Use in-game server browser buttons
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not playerGui then return false end
+    if playerGui then
+        local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
+        if serverBrowser then
+            local frame = serverBrowser:FindFirstChild("Frame")
+            if frame then
+                local teleportButtons = frame:FindFirstChild("TeleportButtons")
+                if teleportButtons then
+                    -- Try different button name patterns
+                    local buttonNames = {
+                        "Sea" .. tostring(seaNumber),
+                        "Sea " .. tostring(seaNumber),
+                        tostring(seaNumber)
+                    }
 
-    local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
-    if not serverBrowser then return false end
-
-    local frame = serverBrowser:FindFirstChild("Frame")
-    if not frame then return false end
-
-    local teleportButtons = frame:FindFirstChild("TeleportButtons")
-    if not teleportButtons then return false end
-
-    local buttonName = "Sea" .. tostring(seaNumber)
-    local seaButton = teleportButtons:FindFirstChild(buttonName)
-
-    if seaButton then
-        -- Fire the button
-        pcall(function()
-            if seaButton:FindFirstChild("TextButton") then
-                firesignal(seaButton.TextButton.Activated)
-            else
-                firesignal(seaButton.Activated)
+                    for _, buttonName in ipairs(buttonNames) do
+                        local seaButton = teleportButtons:FindFirstChild(buttonName)
+                        if seaButton then
+                            pcall(function()
+                                -- Try multiple fire methods
+                                if seaButton:IsA("TextButton") then
+                                    if firesignal then
+                                        firesignal(seaButton.Activated)
+                                        firesignal(seaButton.MouseButton1Click)
+                                    end
+                                elseif seaButton:FindFirstChildOfClass("TextButton") then
+                                    local btn = seaButton:FindFirstChildOfClass("TextButton")
+                                    if firesignal then
+                                        firesignal(btn.Activated)
+                                        firesignal(btn.MouseButton1Click)
+                                    end
+                                end
+                            end)
+                            return true
+                        end
+                    end
+                end
             end
-        end)
-        return true
+        end
     end
 
-    return false
+    -- Method 2: Use game remote
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local commF = remotes:FindFirstChild("CommF_")
+        if commF then
+            pcall(function()
+                commF:InvokeServer("TravelMain")
+                commF:InvokeServer("TravelDressrosa")
+                commF:InvokeServer("TravelZou")
+            end)
+        end
+    end
+
+    -- Method 3: Direct teleport as fallback
+    pcall(function()
+        TeleportService:Teleport(targetPlaceId, LocalPlayer)
+    end)
+
+    return true
 end
 
 -- Reset character
