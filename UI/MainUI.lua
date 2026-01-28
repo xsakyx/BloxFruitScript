@@ -8,7 +8,7 @@ local MainUI = {}
 MainUI.__index = MainUI
 
 -- UI Library URL (RenLib or alternative)
-local LIBRARY_URL = "https://raw.githubusercontent.com/idk123456789012345678/ren/refs/heads/main/lib"
+local LIBRARY_URL = "https://raw.githubusercontent.com/xsakyx/RobloxUILib/refs/heads/main/RenLibBêta.lua"
 
 function MainUI.new()
     local self = setmetatable({}, MainUI)
