@@ -166,7 +166,7 @@ local function CreateUI(modules, instances)
     -- Load RenLib
     local Library
     local success, err = pcall(function()
-        Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/idk123456789012345678/ren/refs/heads/main/lib"))()
+        Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xsakyx/RobloxUILib/refs/heads/main/RenLibB%C3%AAta.lua"))()
     end)
 
     if not success or not Library then
