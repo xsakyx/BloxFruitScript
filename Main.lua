@@ -1,6 +1,6 @@
 --[[
     Blox Fruits Auto Farm Script
-    Main Entry Point
+    Main Entry Point - Executor Compatible Version
 
     Features:
     - Auto Quest Farm (auto-select best quest, kill mobs, turn in)
@@ -63,39 +63,11 @@ local SCRIPT_CONFIG = {
     DataFolder = "BloxFruitScript"
 }
 
--- GitHub raw content base URL (for loading modules remotely if needed)
-local GITHUB_BASE = "https://raw.githubusercontent.com/your-repo/BloxFruitScript/main/"
+-- GitHub raw content base URL - UPDATE THIS TO YOUR REPO
+local GITHUB_BASE = "https://raw.githubusercontent.com/xsakyx/BloxFruitScript/claude/blox-fruits-script-setup-qctSa/"
 
 -- Module cache
-local Modules = {}
-
--- Load module from string (for executor environment)
-local function LoadModuleFromString(moduleCode, moduleName)
-    local success, result = pcall(function()
-        return loadstring(moduleCode)()
-    end)
-
-    if success then
-        return result
-    else
-        warn("[BloxFruits] Failed to load module:", moduleName, result)
-        return nil
-    end
-end
-
--- Load JSON data
-local function LoadJSONData(jsonString)
-    local success, result = pcall(function()
-        return HttpService:JSONDecode(jsonString)
-    end)
-
-    if success then
-        return result
-    else
-        warn("[BloxFruits] Failed to parse JSON:", result)
-        return nil
-    end
-end
+local LoadedModules = {}
 
 -- Print startup banner
 local function PrintBanner()
@@ -106,57 +78,66 @@ local function PrintBanner()
     print("Loading modules...")
 end
 
---[[
-    INLINE MODULE LOADING
-    In a real executor environment, you would either:
-    1. Load modules from URLs using game:HttpGet()
-    2. Have modules as separate files loaded by the executor
-    3. Use a loadstring approach
+-- Load module from URL
+local function LoadModule(modulePath)
+    if LoadedModules[modulePath] then
+        return LoadedModules[modulePath]
+    end
 
-    For this structure, we'll define how modules should be loaded
-]]
-
--- Module loader (simulated - replace with actual loading in executor)
-local function RequireModule(modulePath)
-    -- In executor environment, this would be:
-    -- return loadstring(game:HttpGet(GITHUB_BASE .. modulePath))()
-
-    -- For local development/testing, return placeholder
+    local url = GITHUB_BASE .. modulePath
     print("[BloxFruits] Loading:", modulePath)
-    return nil -- Replace with actual module loading
+
+    local success, result = pcall(function()
+        local code = game:HttpGet(url)
+        return loadstring(code)()
+    end)
+
+    if success then
+        LoadedModules[modulePath] = result
+        return result
+    else
+        warn("[BloxFruits] Failed to load module:", modulePath, result)
+        return nil
+    end
+end
+
+-- Load JSON data from URL
+local function LoadJSONFromURL(jsonPath)
+    local url = GITHUB_BASE .. jsonPath
+    print("[BloxFruits] Loading data:", jsonPath)
+
+    local success, result = pcall(function()
+        local jsonString = game:HttpGet(url)
+        return HttpService:JSONDecode(jsonString)
+    end)
+
+    if success then
+        return result
+    else
+        warn("[BloxFruits] Failed to load JSON:", jsonPath, result)
+        return nil
+    end
 end
 
 -- Initialize all modules
 local function InitializeModules()
     print("[BloxFruits] Initializing modules...")
 
+    local Modules = {}
+
     -- Load Core modules
-    local StateManagerModule = require and require(script.Parent.Core.StateManager) or RequireModule("Core/StateManager.lua")
-    local ConfigManagerModule = require and require(script.Parent.Core.ConfigManager) or RequireModule("Core/ConfigManager.lua")
+    Modules.StateManager = LoadModule("Core/StateManager.lua")
+    Modules.ConfigManager = LoadModule("Core/ConfigManager.lua")
 
     -- Load Feature modules
-    local TeleportModule = require and require(script.Parent.Modules.Teleport) or RequireModule("Modules/Teleport.lua")
-    local CombatModule = require and require(script.Parent.Modules.Combat) or RequireModule("Modules/Combat.lua")
-    local AutoFarmModule = require and require(script.Parent.Modules.AutoFarm) or RequireModule("Modules/AutoFarm.lua")
-    local FruitSniperModule = require and require(script.Parent.Modules.FruitSniper) or RequireModule("Modules/FruitSniper.lua")
-    local ESPModule = require and require(script.Parent.Modules.ESP) or RequireModule("Modules/ESP.lua")
-    local MiscModule = require and require(script.Parent.Modules.Misc) or RequireModule("Modules/Misc.lua")
+    Modules.Teleport = LoadModule("Modules/Teleport.lua")
+    Modules.Combat = LoadModule("Modules/Combat.lua")
+    Modules.AutoFarm = LoadModule("Modules/AutoFarm.lua")
+    Modules.FruitSniper = LoadModule("Modules/FruitSniper.lua")
+    Modules.ESP = LoadModule("Modules/ESP.lua")
+    Modules.Misc = LoadModule("Modules/Misc.lua")
 
-    -- Load UI module
-    local MainUIModule = require and require(script.Parent.UI.MainUI) or RequireModule("UI/MainUI.lua")
-
-    -- Store modules
-    Modules = {
-        StateManager = StateManagerModule,
-        ConfigManager = ConfigManagerModule,
-        Teleport = TeleportModule,
-        Combat = CombatModule,
-        AutoFarm = AutoFarmModule,
-        FruitSniper = FruitSniperModule,
-        ESP = ESPModule,
-        Misc = MiscModule,
-        MainUI = MainUIModule
-    }
+    -- Note: UI will use the RenLib library directly instead of loading from file
 
     return Modules
 end
@@ -165,16 +146,442 @@ end
 local function LoadGameData()
     print("[BloxFruits] Loading game data...")
 
-    local questData, islandsData, fruitsData, npcsData
-
-    -- In executor environment, load from JSON files or URLs
-    -- For now, return empty tables (data is defined in Data/*.json)
+    local questData = LoadJSONFromURL("Data/Quests.json")
+    local islandsData = LoadJSONFromURL("Data/Islands.json")
+    local fruitsData = LoadJSONFromURL("Data/Fruits.json")
+    local npcsData = LoadJSONFromURL("Data/NPCs.json")
 
     return {
         Quests = questData or {},
         Islands = islandsData or {},
         Fruits = fruitsData or {},
         NPCs = npcsData or {}
+    }
+end
+
+-- Create UI using RenLib
+local function CreateUI(modules, instances)
+    print("[BloxFruits] Creating UI...")
+
+    -- Load RenLib
+    local Library
+    local success, err = pcall(function()
+        Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/idk123456789012345678/ren/refs/heads/main/lib"))()
+    end)
+
+    if not success or not Library then
+        warn("[BloxFruits] Failed to load UI library:", err)
+        return nil
+    end
+
+    -- Create main window
+    local Window = Library:CreateWindow({
+        Name = "Blox Fruits Auto Farm"
+    })
+
+    -- Main Tab
+    local MainTab = Window:CreateTab({
+        Name = "Main",
+        Emoji = "🏠"
+    })
+
+    local MainSection = MainTab:CreateSection({
+        Name = "Auto Farm",
+        Side = "Left"
+    })
+
+    -- Auto Farm Toggle
+    MainSection:CreateToggle({
+        Name = "Auto Farm Quests",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("General", "AutoFarm", value)
+            end
+            if instances.autoFarm then
+                if value then
+                    instances.autoFarm:Start()
+                else
+                    instances.autoFarm:Stop()
+                end
+            end
+        end
+    })
+
+    -- Fruit Sniper Toggle
+    MainSection:CreateToggle({
+        Name = "Fruit Sniper",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("General", "FruitSniper", value)
+            end
+            if instances.fruitSniper then
+                if value then
+                    instances.fruitSniper:Start()
+                else
+                    instances.fruitSniper:Stop()
+                end
+            end
+        end
+    })
+
+    -- ESP Toggle
+    MainSection:CreateToggle({
+        Name = "ESP",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("ESP", "Enabled", value)
+            end
+            if instances.esp then
+                if value then
+                    instances.esp:Start()
+                else
+                    instances.esp:Stop()
+                end
+            end
+        end
+    })
+
+    -- Farm Settings Section
+    local FarmSection = MainTab:CreateSection({
+        Name = "Farm Settings",
+        Side = "Right"
+    })
+
+    FarmSection:CreateToggle({
+        Name = "Bring Mobs",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("General", "BringMobs", value)
+            end
+        end
+    })
+
+    FarmSection:CreateSlider({
+        Name = "Bring Distance",
+        Min = 20,
+        Max = 200,
+        Default = 80,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("General", "BringDistance", value)
+            end
+        end
+    })
+
+    FarmSection:CreateToggle({
+        Name = "Skip Bosses",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Quest", "SkipBosses", value)
+            end
+        end
+    })
+
+    -- Combat Tab
+    local CombatTab = Window:CreateTab({
+        Name = "Combat",
+        Emoji = "⚔️"
+    })
+
+    local CombatSection = CombatTab:CreateSection({
+        Name = "Combat Settings",
+        Side = "Left"
+    })
+
+    CombatSection:CreateToggle({
+        Name = "Auto Attack",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Combat", "AutoAttack", value)
+            end
+        end
+    })
+
+    CombatSection:CreateToggle({
+        Name = "Auto Skills",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Combat", "AutoSkills", value)
+            end
+        end
+    })
+
+    CombatSection:CreateToggle({
+        Name = "Auto Haki",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Combat", "AutoHaki", value)
+            end
+        end
+    })
+
+    -- Skills Section
+    local SkillsSection = CombatTab:CreateSection({
+        Name = "Skills",
+        Side = "Right"
+    })
+
+    for _, key in ipairs({"Z", "X", "C", "V", "F"}) do
+        SkillsSection:CreateToggle({
+            Name = "Use " .. key .. " Skill",
+            Default = (key == "Z" or key == "X"),
+            Callback = function(value)
+                if instances.config then
+                    local skills = instances.config:Get("Combat", "SkillsEnabled") or {}
+                    skills[key] = value
+                    instances.config:Set("Combat", "SkillsEnabled", skills)
+                end
+            end
+        })
+    end
+
+    -- Teleport Tab
+    local TeleportTab = Window:CreateTab({
+        Name = "Teleport",
+        Emoji = "🚀"
+    })
+
+    local TeleportSection = TeleportTab:CreateSection({
+        Name = "Teleport Settings",
+        Side = "Left"
+    })
+
+    TeleportSection:CreateSlider({
+        Name = "Tween Speed",
+        Min = 50,
+        Max = 500,
+        Default = 200,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Teleport", "TweenSpeed", value)
+            end
+        end
+    })
+
+    TeleportSection:CreateToggle({
+        Name = "Bypass Walls (NoClip)",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Teleport", "BypassWalls", value)
+            end
+        end
+    })
+
+    -- Sea Travel Section
+    local SeaSection = TeleportTab:CreateSection({
+        Name = "Sea Travel",
+        Side = "Right"
+    })
+
+    SeaSection:CreateButton({
+        Name = "Travel to Sea 1",
+        Callback = function()
+            if instances.misc then
+                instances.misc:TravelToSea(1)
+            end
+        end
+    })
+
+    SeaSection:CreateButton({
+        Name = "Travel to Sea 2",
+        Callback = function()
+            if instances.misc then
+                instances.misc:TravelToSea(2)
+            end
+        end
+    })
+
+    SeaSection:CreateButton({
+        Name = "Travel to Sea 3",
+        Callback = function()
+            if instances.misc then
+                instances.misc:TravelToSea(3)
+            end
+        end
+    })
+
+    -- ESP Tab
+    local ESPTab = Window:CreateTab({
+        Name = "ESP",
+        Emoji = "👁️"
+    })
+
+    local ESPSection = ESPTab:CreateSection({
+        Name = "ESP Settings",
+        Side = "Left"
+    })
+
+    ESPSection:CreateToggle({
+        Name = "Fruit ESP",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("ESP", "FruitESP", value)
+            end
+        end
+    })
+
+    ESPSection:CreateToggle({
+        Name = "Boss ESP",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("ESP", "BossESP", value)
+            end
+        end
+    })
+
+    ESPSection:CreateToggle({
+        Name = "Player ESP",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("ESP", "PlayerESP", value)
+            end
+        end
+    })
+
+    ESPSection:CreateToggle({
+        Name = "Mob ESP",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("ESP", "MobESP", value)
+            end
+        end
+    })
+
+    ESPSection:CreateToggle({
+        Name = "Chest ESP",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("ESP", "ChestESP", value)
+            end
+        end
+    })
+
+    -- Misc Tab
+    local MiscTab = Window:CreateTab({
+        Name = "Misc",
+        Emoji = "⚙️"
+    })
+
+    local MiscSection = MiscTab:CreateSection({
+        Name = "Utilities",
+        Side = "Left"
+    })
+
+    MiscSection:CreateToggle({
+        Name = "Anti-AFK",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Misc", "AntiAFK", value)
+            end
+            if instances.misc then
+                if value then
+                    instances.misc:StartAntiAFK()
+                else
+                    instances.misc:StopAntiAFK()
+                end
+            end
+        end
+    })
+
+    MiscSection:CreateToggle({
+        Name = "Auto Rejoin",
+        Default = true,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Misc", "AutoRejoin", value)
+            end
+            if instances.misc then
+                if value then
+                    instances.misc:StartAutoRejoin()
+                else
+                    instances.misc:StopAutoRejoin()
+                end
+            end
+        end
+    })
+
+    MiscSection:CreateToggle({
+        Name = "No Clip",
+        Default = false,
+        Callback = function(value)
+            if instances.config then
+                instances.config:Set("Misc", "NoClip", value)
+            end
+            if instances.misc then
+                if value then
+                    instances.misc:StartNoClip()
+                else
+                    instances.misc:StopNoClip()
+                end
+            end
+        end
+    })
+
+    -- Actions Section
+    local ActionsSection = MiscTab:CreateSection({
+        Name = "Actions",
+        Side = "Right"
+    })
+
+    ActionsSection:CreateButton({
+        Name = "Server Hop",
+        Callback = function()
+            if instances.misc then
+                instances.misc:ServerHop()
+            end
+        end
+    })
+
+    ActionsSection:CreateButton({
+        Name = "Rejoin Server",
+        Callback = function()
+            if instances.misc then
+                instances.misc:Rejoin()
+            end
+        end
+    })
+
+    ActionsSection:CreateButton({
+        Name = "Reset Character",
+        Callback = function()
+            if instances.misc then
+                instances.misc:ResetCharacter()
+            end
+        end
+    })
+
+    ActionsSection:CreateButton({
+        Name = "Save Config",
+        Callback = function()
+            if instances.config then
+                local success = instances.config:Save()
+                Library:Notify({
+                    Title = "Config",
+                    Content = success and "Config saved!" or "Failed to save config",
+                    Duration = 3
+                })
+            end
+        end
+    })
+
+    return {
+        Window = Window,
+        Library = Library
     }
 end
 
@@ -185,17 +592,10 @@ local function Initialize()
     -- Initialize modules
     local modules = InitializeModules()
 
-    -- Check if modules loaded
-    local hasModules = false
-    for name, mod in pairs(modules) do
-        if mod then
-            hasModules = true
-            break
-        end
-    end
-
-    if not hasModules then
-        warn("[BloxFruits] No modules loaded. Using inline fallback...")
+    -- Check if core modules loaded
+    if not modules.ConfigManager or not modules.StateManager then
+        warn("[BloxFruits] Failed to load core modules!")
+        return
     end
 
     -- Create instances
@@ -207,7 +607,17 @@ local function Initialize()
     local fruitSniper = modules.FruitSniper and modules.FruitSniper.new(config, teleport) or nil
     local esp = modules.ESP and modules.ESP.new(config) or nil
     local misc = modules.Misc and modules.Misc.new(config) or nil
-    local ui = modules.MainUI and modules.MainUI.new() or nil
+
+    local instances = {
+        config = config,
+        stateManager = stateManager,
+        teleport = teleport,
+        combat = combat,
+        autoFarm = autoFarm,
+        fruitSniper = fruitSniper,
+        esp = esp,
+        misc = misc
+    }
 
     -- Load saved config
     if config then
@@ -216,23 +626,13 @@ local function Initialize()
 
     -- Load game data and inject into modules
     local gameData = LoadGameData()
-    if autoFarm then
+    if autoFarm and gameData then
         autoFarm:LoadData(gameData.Quests, gameData.NPCs, gameData.Islands)
     end
 
-    -- Initialize UI
-    if ui then
-        ui:SetModules({
-            config = config,
-            autoFarm = autoFarm,
-            fruitSniper = fruitSniper,
-            combat = combat,
-            esp = esp,
-            misc = misc,
-            teleport = teleport
-        })
-        ui:Init()
-    end
+    -- Create UI
+    local ui = CreateUI(modules, instances)
+    instances.ui = ui
 
     -- Start misc features (Anti-AFK, etc.)
     if misc then
@@ -242,28 +642,44 @@ local function Initialize()
     -- Setup callbacks
     if autoFarm then
         autoFarm:OnQuestComplete(function(questName)
-            if misc then
-                misc:Notify("Quest Complete", questName)
+            if ui and ui.Library then
+                ui.Library:Notify({
+                    Title = "Quest Complete",
+                    Content = questName,
+                    Duration = 3
+                })
             end
         end)
 
         autoFarm:OnLevelUp(function(newLevel)
-            if misc then
-                misc:Notify("Level Up!", "Level " .. tostring(newLevel))
+            if ui and ui.Library then
+                ui.Library:Notify({
+                    Title = "Level Up!",
+                    Content = "Level " .. tostring(newLevel),
+                    Duration = 3
+                })
             end
         end)
     end
 
     if fruitSniper then
         fruitSniper:OnFruitFound(function(fruitName, tier, distance)
-            if misc then
-                misc:Notify("Fruit Found!", fruitName .. " (" .. tier .. ") - " .. math.floor(distance) .. "m")
+            if ui and ui.Library then
+                ui.Library:Notify({
+                    Title = "Fruit Found!",
+                    Content = fruitName .. " (" .. tier .. ") - " .. math.floor(distance) .. "m",
+                    Duration = 5
+                })
             end
         end)
 
         fruitSniper:OnFruitCollected(function(fruitName, tier)
-            if misc then
-                misc:Notify("Fruit Collected!", fruitName .. " (" .. tier .. ")")
+            if ui and ui.Library then
+                ui.Library:Notify({
+                    Title = "Fruit Collected!",
+                    Content = fruitName .. " (" .. tier .. ")",
+                    Duration = 5
+                })
             end
         end)
     end
@@ -291,7 +707,7 @@ local function Initialize()
                 if esp then esp:Stop() end
             end,
             ToggleUI = function()
-                if ui then ui:Toggle() end
+                if ui and ui.Window then ui.Window:Toggle() end
             end,
             ServerHop = function()
                 if misc then misc:ServerHop() end
@@ -302,23 +718,15 @@ local function Initialize()
         }
     end
 
-    -- Stats update loop
-    task.spawn(function()
-        while true do
-            task.wait(1)
-
-            if misc and ui then
-                local stats = misc:GetPlayerData()
-                ui:UpdateStats(stats)
-            end
-        end
-    end)
-
     print("[BloxFruits] Script loaded successfully!")
-    print("[BloxFruits] Press RightControl to toggle UI")
+    print("[BloxFruits] Press K to toggle UI")
 
-    if misc then
-        misc:Notify(SCRIPT_CONFIG.Name, "Script loaded! Press RightControl to toggle UI")
+    if ui and ui.Library then
+        ui.Library:Notify({
+            Title = SCRIPT_CONFIG.Name,
+            Content = "Script loaded! Press K to toggle UI",
+            Duration = 5
+        })
     end
 end
 
@@ -366,24 +774,5 @@ task.spawn(function()
         warn("[BloxFruits] Failed to initialize:", err)
     end
 end)
-
---[[
-    EXECUTOR LOADING EXAMPLE
-    To use this script in an executor, you would typically:
-
-    1. Single file approach (concatenate all modules):
-       loadstring(game:HttpGet("your-url/BloxFruitScript.lua"))()
-
-    2. Multi-file approach (load modules separately):
-       local baseUrl = "your-url/BloxFruitScript/"
-       local modules = {"Core/StateManager", "Core/ConfigManager", ...}
-       for _, mod in ipairs(modules) do
-           loadstring(game:HttpGet(baseUrl .. mod .. ".lua"))()
-       end
-       loadstring(game:HttpGet(baseUrl .. "Main.lua"))()
-
-    3. GitHub raw content:
-       loadstring(game:HttpGet("https://raw.githubusercontent.com/user/repo/main/Main.lua"))()
-]]
 
 return SCRIPT_CONFIG
