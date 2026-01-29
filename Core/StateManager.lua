@@ -45,7 +45,7 @@ local ValidTransitions = {
     [States.FRUIT_SNIPING] = {States.IDLE, States.NAVIGATING, States.LOOTING, States.ERROR, States.PAUSED},
     [States.BOSS_FARMING] = {States.IDLE, States.NAVIGATING, States.COMBAT, States.ERROR, States.PAUSED},
     [States.MASTERY] = {States.IDLE, States.NAVIGATING, States.COMBAT, States.ERROR, States.PAUSED},
-    [States.ERROR] = {States.IDLE, States.PAUSED},
+    [States.ERROR] = {States.IDLE, States.QUESTING, States.PAUSED},
     [States.PAUSED] = {States.IDLE, States.QUESTING, States.FRUIT_SNIPING, States.BOSS_FARMING, States.MASTERY}
 }
 
@@ -113,15 +113,20 @@ function StateManager:SetState(newState, data, force)
         return false
     end
 
+    -- Same state transition - just update data if provided, no warning
+    if self.currentState == newState then
+        if data then
+            for k, v in pairs(data) do
+                self.stateData[k] = v
+            end
+        end
+        return true
+    end
+
     -- Check if transition is valid (unless forced)
     if not force and not self:IsValidTransition(self.currentState, newState) then
         warn("[StateManager] Invalid transition from", self.currentState, "to", newState)
         return false
-    end
-
-    -- Don't transition to same state
-    if self.currentState == newState and not force then
-        return true
     end
 
     local oldState = self.currentState

@@ -1,7 +1,8 @@
 --[[
     ESP.lua
-    Visual ESP system for fruits, players, mobs, bosses, chests
-    Creates billboards and highlights for entities
+    Visual ESP system for fruits, players, bosses, chests
+    Correct paths for Blox Fruits game structure
+    NOTE: Mob ESP removed as requested
 ]]
 
 local ESP = {}
@@ -11,20 +12,18 @@ ESP.__index = ESP
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local CollectionService = game:GetService("CollectionService")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
-local UPDATE_INTERVAL = 0.5 -- Increased to prevent crashes
-local MAX_ESP_OBJECTS = 50 -- Limit max ESP objects
+local UPDATE_INTERVAL = 1 -- Slower updates for performance
+local MAX_ESP_OBJECTS = 30 -- Reduced limit
+
 local DEFAULT_COLORS = {
     Player = Color3.fromRGB(255, 0, 0),
-    Mob = Color3.fromRGB(255, 255, 0),
     Boss = Color3.fromRGB(255, 0, 255),
     Fruit = Color3.fromRGB(0, 255, 0),
-    Chest = Color3.fromRGB(255, 170, 0),
-    NPC = Color3.fromRGB(0, 170, 255)
+    Chest = Color3.fromRGB(255, 170, 0)
 }
 
 local FRUIT_TIER_COLORS = {
@@ -36,6 +35,15 @@ local FRUIT_TIER_COLORS = {
     Unknown = Color3.fromRGB(150, 150, 150)
 }
 
+-- Fruit tiers for color coding
+local FRUIT_TIERS = {
+    Mythical = {"Leopard", "Kitsune", "Spirit", "Dough", "Venom", "Control", "Shadow", "Gas", "Yeti", "Dragon"},
+    Legendary = {"Phoenix", "Rumble", "Portal", "Gravity", "Pain", "Blizzard", "Sound", "Love", "Spider", "Creation", "Mammoth", "T-Rex"},
+    Rare = {"Light", "Rubber", "Ghost", "Magma", "Quake"},
+    Uncommon = {"Flame", "Sand", "Dark", "Diamond", "Eagle"},
+    Common = {"Rocket", "Spin", "Blade", "Spring", "Bomb", "Smoke", "Spike"}
+}
+
 function ESP.new(config)
     local self = setmetatable({}, ESP)
 
@@ -44,11 +52,6 @@ function ESP.new(config)
     self.espObjects = {}
     self.updateLoop = nil
     self.lastUpdate = 0
-
-    -- ESP containers
-    self.espFolder = Instance.new("Folder")
-    self.espFolder.Name = "BloxFruitESP"
-    self.espFolder.Parent = game:GetService("CoreGui")
 
     return self
 end
@@ -65,52 +68,65 @@ local function GetCharacter()
     return nil, nil
 end
 
--- Get distance to entity
-local function GetDistance(entity)
+-- Get distance to position/entity
+local function GetDistance(target)
     local _, rootPart = GetCharacter()
     if not rootPart then return math.huge end
 
-    local targetPart
-    if typeof(entity) == "Instance" then
-        if entity:IsA("BasePart") then
-            targetPart = entity
+    local position
+    if typeof(target) == "Vector3" then
+        position = target
+    elseif typeof(target) == "CFrame" then
+        position = target.Position
+    elseif typeof(target) == "Instance" then
+        if target:IsA("BasePart") then
+            position = target.Position
         else
-            targetPart = entity:FindFirstChild("HumanoidRootPart") or
-                        entity:FindFirstChild("Torso") or
-                        entity.PrimaryPart or
-                        entity:FindFirstChildOfClass("BasePart")
+            local part = target:FindFirstChild("HumanoidRootPart") or
+                        target:FindFirstChild("Head") or
+                        target:FindFirstChild("UpperTorso") or
+                        target:FindFirstChild("Handle") or
+                        target:FindFirstChildOfClass("BasePart")
+            if part then
+                position = part.Position
+            end
         end
-    elseif typeof(entity) == "Vector3" then
-        return (rootPart.Position - entity).Magnitude
     end
 
-    if not targetPart then return math.huge end
-    return (rootPart.Position - targetPart.Position).Magnitude
+    if not position then return math.huge end
+    return (rootPart.Position - position).Magnitude
 end
 
--- Create billboard GUI for ESP
-function ESP:CreateBillboard(entity, text, color, entityType)
-    if not entity then return nil end
-
-    -- Check limit
-    if self:GetESPCount() >= MAX_ESP_OBJECTS then
-        return nil
+-- Get fruit tier
+local function GetFruitTier(fruitName)
+    for tier, fruits in pairs(FRUIT_TIERS) do
+        for _, name in ipairs(fruits) do
+            if fruitName:find(name) then
+                return tier
+            end
+        end
     end
+    return "Unknown"
+end
+
+-- Create billboard GUI
+function ESP:CreateBillboard(entity, text, color, entityType, adorneeOverride)
+    if not entity then return nil end
+    if self:GetESPCount() >= MAX_ESP_OBJECTS then return nil end
 
     -- Find attachment point
-    local adornee = entity:FindFirstChild("HumanoidRootPart") or
+    local adornee = adorneeOverride or
                    entity:FindFirstChild("Head") or
-                   entity:FindFirstChild("Torso") or
-                   entity.PrimaryPart or
+                   entity:FindFirstChild("UpperTorso") or
+                   entity:FindFirstChild("Handle") or
+                   entity:FindFirstChild("HumanoidRootPart") or
                    entity:FindFirstChildOfClass("BasePart")
 
     if not adornee then return nil end
 
-    -- Check if already exists
-    local existingGui = adornee:FindFirstChild("ESP_Billboard")
-    if existingGui then
-        existingGui:Destroy()
-    end
+    -- Remove existing
+    local existing = adornee:FindFirstChild("ESP_Billboard")
+    if existing then existing:Destroy() end
 
     -- Create billboard
     local billboard = Instance.new("BillboardGui")
@@ -121,7 +137,6 @@ function ESP:CreateBillboard(entity, text, color, entityType)
     billboard.AlwaysOnTop = true
     billboard.Parent = adornee
 
-    -- Create text label
     local textLabel = Instance.new("TextLabel")
     textLabel.Name = "ESPText"
     textLabel.Size = UDim2.new(1, 0, 1, 0)
@@ -134,7 +149,6 @@ function ESP:CreateBillboard(entity, text, color, entityType)
     textLabel.Text = text
     textLabel.Parent = billboard
 
-    -- Store reference
     self.espObjects[entity] = {
         Billboard = billboard,
         TextLabel = textLabel,
@@ -145,124 +159,100 @@ function ESP:CreateBillboard(entity, text, color, entityType)
     return billboard
 end
 
--- Create highlight for entity
-function ESP:CreateHighlight(entity, color)
-    if not entity then return nil end
-
-    -- Check if already has highlight
-    local existingHighlight = entity:FindFirstChild("ESP_Highlight")
-    if existingHighlight then
-        existingHighlight.FillColor = color
-        return existingHighlight
-    end
-
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "ESP_Highlight"
-    highlight.FillColor = color
-    highlight.OutlineColor = color
-    highlight.FillTransparency = 0.7
-    highlight.OutlineTransparency = 0
-    highlight.Parent = entity
-
-    return highlight
-end
-
 -- Remove ESP from entity
 function ESP:RemoveESP(entity)
     if not entity then return end
 
     local data = self.espObjects[entity]
-    if data then
-        if data.Billboard then
-            data.Billboard:Destroy()
+    if data and data.Billboard then
+        pcall(function() data.Billboard:Destroy() end)
+    end
+    self.espObjects[entity] = nil
+
+    -- Also try to find and remove any billboards
+    pcall(function()
+        for _, part in pairs(entity:GetDescendants()) do
+            if part.Name == "ESP_Billboard" then
+                part:Destroy()
+            end
         end
-        self.espObjects[entity] = nil
-    end
-
-    local highlight = entity:FindFirstChild("ESP_Highlight")
-    if highlight then
-        highlight:Destroy()
-    end
-
-    local billboard = entity:FindFirstChild("ESP_Billboard")
-    if billboard then
-        billboard:Destroy()
-    end
+    end)
 end
 
--- Update ESP text
-function ESP:UpdateESP(entity, text, showDistance, showHealth)
+-- Update ESP text with distance
+function ESP:UpdateESP(entity, text, showDistance)
     local data = self.espObjects[entity]
     if not data then return end
 
     local displayText = text
-
     if showDistance then
         local distance = math.floor(GetDistance(entity))
         displayText = displayText .. "\n[" .. distance .. "m]"
     end
 
-    if showHealth then
-        local humanoid = entity:FindFirstChild("Humanoid")
-        if humanoid then
-            local healthPercent = math.floor((humanoid.Health / humanoid.MaxHealth) * 100)
-            displayText = displayText .. "\n" .. healthPercent .. "% HP"
-        end
-    end
-
-    data.TextLabel.Text = displayText
+    pcall(function()
+        data.TextLabel.Text = displayText
+    end)
 end
 
--- Scan and update player ESP
+-- Player ESP - uses workspace.Characters
 function ESP:UpdatePlayerESP()
     if not self.config or not self.config:Get("ESP", "PlayerESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "NPCDistance") or 500
+    local maxDistance = self.config:Get("ESP", "PlayerDistance") or 500
     local showDistance = self.config:Get("ESP", "ShowDistance")
-    local showHealth = self.config:Get("ESP", "ShowHealth")
-    local teamCheck = self.config:Get("ESP", "TeamCheck")
-    local character = GetCharacter()
 
-    for _, player in pairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if not player.Character then continue end
+    -- Players are in workspace.Characters as models named by username
+    local characters = Workspace:FindFirstChild("Characters")
+    if characters then
+        for _, playerModel in pairs(characters:GetChildren()) do
+            if playerModel:IsA("Model") then
+                -- Skip local player
+                if playerModel.Name == LocalPlayer.Name then continue end
 
-        -- Team check
-        if teamCheck and player.Team == LocalPlayer.Team then
-            self:RemoveESP(player.Character)
-            continue
-        end
+                local distance = GetDistance(playerModel)
+                if distance > maxDistance then
+                    self:RemoveESP(playerModel)
+                    continue
+                end
 
-        local distance = GetDistance(player.Character)
-        if distance > maxDistance then
-            self:RemoveESP(player.Character)
-            continue
-        end
+                local text = playerModel.Name
+                local color = DEFAULT_COLORS.Player
 
-        local color = DEFAULT_COLORS.Player
-        local text = player.DisplayName
+                -- Use Head or UpperTorso for adornee
+                local adornee = playerModel:FindFirstChild("Head") or playerModel:FindFirstChild("UpperTorso")
 
-        if not self.espObjects[player.Character] then
-            self:CreateBillboard(player.Character, text, color, "Player")
-            self:CreateHighlight(player.Character, color)
-        else
-            self:UpdateESP(player.Character, text, showDistance, showHealth)
+                if not self.espObjects[playerModel] then
+                    self:CreateBillboard(playerModel, text, color, "Player", adornee)
+                else
+                    self:UpdateESP(playerModel, text, showDistance)
+                end
+            end
         end
     end
 end
 
--- Scan and update mob ESP
-function ESP:UpdateMobESP()
-    if not self.config or not self.config:Get("ESP", "MobESP") then return end
+-- Boss ESP - bosses have Head and UpperTorso
+function ESP:UpdateBossESP()
+    if not self.config or not self.config:Get("ESP", "BossESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "NPCDistance") or 500
+    local maxDistance = self.config:Get("ESP", "BossDistance") or 1000
     local showDistance = self.config:Get("ESP", "ShowDistance")
-    local showHealth = self.config:Get("ESP", "ShowHealth")
 
     local enemies = Workspace:FindFirstChild("Enemies")
     if not enemies then return end
 
     for _, enemy in pairs(enemies:GetChildren()) do
+        -- Check if it's a boss (bosses typically have certain attributes or names)
+        local isBoss = enemy:GetAttribute("IsBoss") or
+                      enemy:GetAttribute("RaidBoss") or
+                      enemy.Name:find("Boss") or
+                      enemy.Name:find("Captain") or
+                      enemy.Name:find("King") or
+                      enemy.Name:find("Admiral")
+
+        if not isBoss then continue end
+
         local humanoid = enemy:FindFirstChild("Humanoid")
         if not humanoid or humanoid.Health <= 0 then
             self:RemoveESP(enemy)
@@ -275,122 +265,117 @@ function ESP:UpdateMobESP()
             continue
         end
 
-        local isBoss = enemy:GetAttribute("IsBoss") or enemy:GetAttribute("RaidBoss")
-        local color = isBoss and DEFAULT_COLORS.Boss or DEFAULT_COLORS.Mob
         local text = enemy.Name
+        local color = DEFAULT_COLORS.Boss
+        local adornee = enemy:FindFirstChild("Head") or enemy:FindFirstChild("UpperTorso")
 
-        if isBoss and self.config:Get("ESP", "BossESP") then
-            if not self.espObjects[enemy] then
-                self:CreateBillboard(enemy, text, color, "Boss")
-                self:CreateHighlight(enemy, color)
-            else
-                self:UpdateESP(enemy, text, showDistance, showHealth)
-            end
-        elseif not isBoss then
-            if not self.espObjects[enemy] then
-                self:CreateBillboard(enemy, text, color, "Mob")
-            else
-                self:UpdateESP(enemy, text, showDistance, showHealth)
-            end
+        if not self.espObjects[enemy] then
+            self:CreateBillboard(enemy, text, color, "Boss", adornee)
+        else
+            self:UpdateESP(enemy, text, showDistance)
         end
     end
 end
 
--- Scan and update fruit ESP
+-- Fruit ESP - fruits are Tools in workspace named "FruitName Fruit"
 function ESP:UpdateFruitESP()
     if not self.config or not self.config:Get("ESP", "FruitESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "FruitDistance") or 10000
+    local maxDistance = self.config:Get("ESP", "FruitDistance") or 5000
     local showDistance = self.config:Get("ESP", "ShowDistance")
 
-    local containers = {
-        Workspace,
-        Workspace:FindFirstChild("Fruits"),
-        Workspace:FindFirstChild("FruitSpawns"),
-        Workspace:FindFirstChild("Map")
-    }
+    -- Scan workspace direct children for fruit tools
+    for _, obj in pairs(Workspace:GetChildren()) do
+        local isFruit = false
+        local fruitName = ""
 
-    for _, container in pairs(containers) do
-        if not container then continue end
+        -- Check if it's a fruit tool (named "FruitName Fruit")
+        if obj:IsA("Tool") and obj.Name:find("Fruit") then
+            isFruit = true
+            -- Get original name from attribute
+            local originalName = obj:GetAttribute("OriginalName")
+            if originalName then
+                fruitName = originalName:gsub("-", " ")
+            else
+                fruitName = obj.Name:gsub(" Fruit", "")
+            end
+        elseif obj:IsA("Model") and obj.Name:find("Fruit") then
+            isFruit = true
+            fruitName = obj.Name:gsub(" Fruit", "")
+        end
 
-        for _, obj in pairs(container:GetDescendants()) do
-            local isFruit = obj.Name == "Fruit " or obj.Name == "Fruit" or
-                           (obj.Name:find("Fruit") and obj:IsA("Model"))
+        if isFruit then
+            local distance = GetDistance(obj)
+            if distance > maxDistance then
+                self:RemoveESP(obj)
+                continue
+            end
 
-            if isFruit then
-                local distance = GetDistance(obj)
-                if distance > maxDistance then
-                    self:RemoveESP(obj)
-                    continue
-                end
+            -- Get tier and color
+            local tier = GetFruitTier(fruitName)
+            local color = FRUIT_TIER_COLORS[tier] or DEFAULT_COLORS.Fruit
+            local text = fruitName .. " [" .. tier .. "]"
 
-                -- Try to identify fruit
-                local fruitName = obj.Name:gsub(" Fruit", ""):gsub("Fruit ", "")
-                if fruitName == "" or fruitName == "Fruit" then
-                    fruitName = "Unknown Fruit"
-                end
+            -- Use Handle part for adornee
+            local adornee = obj:FindFirstChild("Handle")
 
-                -- Get tier color
-                local tier = "Unknown"
-                for tierName, fruits in pairs(FRUIT_TIER_COLORS) do
-                    -- This would need fruit tier data, using default for now
-                end
-                local color = FRUIT_TIER_COLORS[tier] or DEFAULT_COLORS.Fruit
-
-                if not self.espObjects[obj] then
-                    self:CreateBillboard(obj, fruitName, color, "Fruit")
-                    self:CreateHighlight(obj, color)
-                else
-                    local displayText = fruitName
-                    if showDistance then
-                        displayText = displayText .. "\n[" .. math.floor(distance) .. "m]"
-                    end
-                    self.espObjects[obj].TextLabel.Text = displayText
-                end
+            if not self.espObjects[obj] then
+                self:CreateBillboard(obj, text, color, "Fruit", adornee)
+            else
+                self:UpdateESP(obj, text, showDistance)
             end
         end
     end
 end
 
--- Scan and update chest ESP
+-- Chest ESP - chests are in workspace.Map.IslandName.IslandModel.Details
 function ESP:UpdateChestESP()
     if not self.config or not self.config:Get("ESP", "ChestESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "NPCDistance") or 500
+    local maxDistance = self.config:Get("ESP", "ChestDistance") or 300
     local showDistance = self.config:Get("ESP", "ShowDistance")
 
-    local chests = CollectionService:GetTagged("_ChestTagged")
+    local map = Workspace:FindFirstChild("Map")
+    if not map then return end
 
-    for _, chest in pairs(chests) do
-        if chest:GetAttribute("IsDisabled") then
-            self:RemoveESP(chest)
-            continue
-        end
+    -- Search through all islands
+    for _, island in pairs(map:GetChildren()) do
+        local islandModel = island:FindFirstChild("IslandModel") or island
+        local details = islandModel:FindFirstChild("Details")
 
-        local distance = GetDistance(chest)
-        if distance > maxDistance then
-            self:RemoveESP(chest)
-            continue
-        end
+        if details then
+            for _, obj in pairs(details:GetChildren()) do
+                -- Check if it's a chest (Chest1, Chest2, Chest3)
+                if obj.Name == "Chest1" or obj.Name == "Chest2" or obj.Name == "Chest3" then
+                    local distance = GetDistance(obj)
+                    if distance > maxDistance then
+                        self:RemoveESP(obj)
+                        continue
+                    end
 
-        local color = DEFAULT_COLORS.Chest
-        local text = "Chest"
+                    local text = obj.Name
+                    local color = DEFAULT_COLORS.Chest
 
-        if not self.espObjects[chest] then
-            self:CreateBillboard(chest, text, color, "Chest")
-        else
-            self:UpdateESP(chest, text, showDistance, false)
+                    if not self.espObjects[obj] then
+                        self:CreateBillboard(obj, text, color, "Chest")
+                    else
+                        self:UpdateESP(obj, text, showDistance)
+                    end
+                end
+            end
         end
     end
 end
 
--- Clean up dead/removed entities
+-- Clean up removed entities
 function ESP:Cleanup()
     for entity, data in pairs(self.espObjects) do
         if not entity or not entity.Parent then
-            if data.Billboard then
-                data.Billboard:Destroy()
-            end
+            pcall(function()
+                if data.Billboard then
+                    data.Billboard:Destroy()
+                end
+            end)
             self.espObjects[entity] = nil
         end
     end
@@ -414,21 +399,16 @@ function ESP:Start()
         if not self.enabled then return end
 
         local now = tick()
-        if now - self.lastUpdate < UPDATE_INTERVAL then
-            return
-        end
+        if now - self.lastUpdate < UPDATE_INTERVAL then return end
         self.lastUpdate = now
 
-        -- Wrap in pcall to prevent crashes
         pcall(function()
-            -- Check if we have too many ESP objects
             if self:GetESPCount() >= MAX_ESP_OBJECTS then
                 self:Cleanup()
             end
 
-            -- Update all ESP types (with pcall for safety)
             pcall(function() self:UpdatePlayerESP() end)
-            pcall(function() self:UpdateMobESP() end)
+            pcall(function() self:UpdateBossESP() end)
             pcall(function() self:UpdateFruitESP() end)
             pcall(function() self:UpdateChestESP() end)
             pcall(function() self:Cleanup() end)
@@ -445,7 +425,6 @@ function ESP:Stop()
         self.updateLoop = nil
     end
 
-    -- Remove all ESP objects
     for entity, _ in pairs(self.espObjects) do
         self:RemoveESP(entity)
     end
@@ -466,23 +445,9 @@ function ESP:IsActive()
     return self.enabled
 end
 
--- Set ESP color for type
-function ESP:SetColor(entityType, color)
-    DEFAULT_COLORS[entityType] = color
-end
-
--- Get default colors
-function ESP:GetColors()
-    return DEFAULT_COLORS
-end
-
 -- Cleanup
 function ESP:Destroy()
     self:Stop()
-
-    if self.espFolder then
-        self.espFolder:Destroy()
-    end
 end
 
 return {

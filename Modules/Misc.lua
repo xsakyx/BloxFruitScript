@@ -1,6 +1,7 @@
 --[[
     Misc.lua
-    Miscellaneous utilities: Anti-AFK, Auto-Rejoin, Stats, etc.
+    Miscellaneous utilities: Anti-AFK (always on), Island Teleport, Stats
+    NOTE: Sea teleport removed, Anti-AFK always enabled
 ]]
 
 local Misc = {}
@@ -10,25 +11,65 @@ Misc.__index = Misc
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local TeleportService = game:GetService("TeleportService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
 local ANTI_AFK_INTERVAL = 60
-local STATS_UPDATE_INTERVAL = 1
 
-function Misc.new(config)
+-- Island data for teleportation
+local ISLANDS = {
+    Sea1 = {
+        ["Starter Island"] = {Position = CFrame.new(-631, 15, 1503)},
+        ["Marine Starter"] = {Position = CFrame.new(-2570, 7, 2073)},
+        ["Jungle"] = {Position = CFrame.new(-1240, 15, 351)},
+        ["Pirate Village"] = {Position = CFrame.new(-1134, 10, 3824)},
+        ["Desert"] = {Position = CFrame.new(1091, 7, 4491)},
+        ["Middle Town"] = {Position = CFrame.new(-692, 15, 1583)},
+        ["Frozen Village"] = {Position = CFrame.new(1201, 87, -1310)},
+        ["Marine Fortress"] = {Position = CFrame.new(-4606, 88, 4294)},
+        ["Colosseum"] = {Position = CFrame.new(-1448, 7, -2756)},
+        ["Magma Village"] = {Position = CFrame.new(-5296, 15, 8417)},
+        ["Underwater City"] = {Position = CFrame.new(61182, 11, 1568)},
+        ["Fountain City"] = {Position = CFrame.new(5276, 70, 4326)}
+    },
+    Sea2 = {
+        ["Kingdom of Rose"] = {Position = CFrame.new(-362, 93, 678)},
+        ["Green Zone"] = {Position = CFrame.new(-2395, 73, -3129)},
+        ["Graveyard"] = {Position = CFrame.new(-5441, 91, -766)},
+        ["Snow Mountain"] = {Position = CFrame.new(533, 474, -5147)},
+        ["Hot and Cold"] = {Position = CFrame.new(-6015, 15, -4820)},
+        ["Cursed Ship"] = {Position = CFrame.new(916, 125, 33028)},
+        ["Ice Castle"] = {Position = CFrame.new(-6032, 15, -5000)},
+        ["Forgotten Island"] = {Position = CFrame.new(-3053, 240, -10295)},
+        ["Dark Arena"] = {Position = CFrame.new(-7050, 108, -2800)},
+        ["Usoap Island"] = {Position = CFrame.new(4837, 14, -775)}
+    },
+    Sea3 = {
+        ["Port Town"] = {Position = CFrame.new(-293, 44, 5554)},
+        ["Hydra Island"] = {Position = CFrame.new(5229, 15, 344)},
+        ["Great Tree"] = {Position = CFrame.new(2877, 1882, -7928)},
+        ["Floating Turtle"] = {Position = CFrame.new(-12681, 409, -7615)},
+        ["Castle on the Sea"] = {Position = CFrame.new(-5044, 314, -2840)},
+        ["Haunted Castle"] = {Position = CFrame.new(-9508, 165, 5765)},
+        ["Sea of Treats"] = {Position = CFrame.new(-2150, 74, -11427)},
+        ["Cake Land"] = {Position = CFrame.new(-1927, 20, -11267)},
+        ["Peanut Island"] = {Position = CFrame.new(-1975, 20, -12400)},
+        ["Chocolate Land"] = {Position = CFrame.new(-2480, 20, -11180)}
+    }
+}
+
+function Misc.new(config, teleport)
     local self = setmetatable({}, Misc)
 
     self.config = config
+    self.teleport = teleport
     self.connections = {}
     self.antiAfkEnabled = false
-    self.autoRejoinEnabled = false
     self.infiniteEnergyEnabled = false
     self.noClipEnabled = false
 
@@ -40,6 +81,9 @@ function Misc.new(config)
         Race = "Unknown",
         CurrentSea = 0
     }
+
+    -- Auto-start Anti-AFK (always enabled, not toggleable)
+    self:StartAntiAFK()
 
     return self
 end
@@ -70,7 +114,6 @@ function Misc:GetPlayerData()
         CurrentSea = self:GetCurrentSea()
     }
 
-    -- Get bounty from leaderstats
     local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
     if leaderstats then
         local bountyHonor = leaderstats:FindFirstChild("Bounty/Honor")
@@ -89,73 +132,88 @@ function Misc:GetCurrentSea()
         [4442272183] = 2,
         [7449423635] = 3
     }
-    return placeIds[game.PlaceId] or 0
+    return placeIds[game.PlaceId] or 1
 end
 
--- Anti-AFK System
+-- Get sea key
+function Misc:GetSeaKey()
+    return "Sea" .. tostring(self:GetCurrentSea())
+end
+
+-- Get island list for current sea
+function Misc:GetIslandList()
+    local seaKey = self:GetSeaKey()
+    local islands = ISLANDS[seaKey]
+    if not islands then return {} end
+
+    local list = {}
+    for name, _ in pairs(islands) do
+        table.insert(list, name)
+    end
+    table.sort(list)
+    return list
+end
+
+-- Teleport to island (using tween)
+function Misc:TeleportToIsland(islandName)
+    local seaKey = self:GetSeaKey()
+    local islands = ISLANDS[seaKey]
+
+    if not islands or not islands[islandName] then
+        warn("[Misc] Island not found:", islandName)
+        return false
+    end
+
+    local targetCFrame = islands[islandName].Position
+    if not targetCFrame then return false end
+
+    if self.teleport then
+        self.teleport:TweenTo(targetCFrame, function(success)
+            if success then
+                self:Notify("Teleport", "Arrived at " .. islandName, 3)
+            end
+        end)
+        return true
+    else
+        -- Fallback direct teleport if no tween module
+        local character, _, rootPart = GetCharacter()
+        if rootPart then
+            rootPart.CFrame = targetCFrame
+            return true
+        end
+    end
+
+    return false
+end
+
+-- Anti-AFK System (always enabled)
 function Misc:StartAntiAFK()
     if self.antiAfkEnabled then return end
     self.antiAfkEnabled = true
 
     -- Disconnect default idle detection
-    local idleConnection
-    for _, connection in pairs(getconnections(LocalPlayer.Idled)) do
-        connection:Disable()
-    end
+    pcall(function()
+        for _, connection in pairs(getconnections(LocalPlayer.Idled)) do
+            connection:Disable()
+        end
+    end)
 
     -- Custom anti-AFK loop
     local antiAfkLoop = task.spawn(function()
         while self.antiAfkEnabled do
-            -- Simulate activity
             pcall(function()
                 VirtualUser:CaptureController()
                 VirtualUser:ClickButton2(Vector2.new())
             end)
-
-            -- Alternative method
-            pcall(function()
-                local viewport = workspace.CurrentCamera.ViewportSize
-                VirtualInputManager:SendMouseMoveEvent(viewport.X / 2, viewport.Y / 2, game)
-            end)
-
             task.wait(ANTI_AFK_INTERVAL)
         end
     end)
 
     self.connections.antiAfk = antiAfkLoop
+    print("[Misc] Anti-AFK enabled (always on)")
 end
 
-function Misc:StopAntiAFK()
-    self.antiAfkEnabled = false
-end
-
--- Auto-Rejoin on kick/disconnect
-function Misc:StartAutoRejoin()
-    if self.autoRejoinEnabled then return end
-    self.autoRejoinEnabled = true
-
-    -- Listen for teleport failure
-    local connection = LocalPlayer.OnTeleport:Connect(function(state)
-        if state == Enum.TeleportState.Failed then
-            task.wait(self.config and self.config:Get("Misc", "RejoinDelay") or 5)
-            if self.autoRejoinEnabled then
-                TeleportService:Teleport(game.PlaceId, LocalPlayer)
-            end
-        end
-    end)
-
-    self.connections.autoRejoin = connection
-end
-
-function Misc:StopAutoRejoin()
-    self.autoRejoinEnabled = false
-    if self.connections.autoRejoin then
-        self.connections.autoRejoin:Disconnect()
-        self.connections.autoRejoin = nil
-    end
-end
-
--- Rejoin server manually
+-- Rejoin server
 function Misc:Rejoin()
     local players = Players:GetPlayers()
     if #players <= 1 then
@@ -194,7 +252,6 @@ function Misc:ServerHop(maxPlayers)
         end
     end
 
-    -- Fallback
     TeleportService:Teleport(game.PlaceId, LocalPlayer)
     return true
 end
@@ -269,15 +326,6 @@ function Misc:Notify(title, text, duration)
     end)
 end
 
--- Copy to clipboard
-function Misc:CopyToClipboard(text)
-    if setclipboard then
-        setclipboard(text)
-        return true
-    end
-    return false
-end
-
 -- Get inventory info
 function Misc:GetInventory()
     local remotes = ReplicatedStorage:FindFirstChild("Remotes")
@@ -309,84 +357,6 @@ function Misc:GetOwnedFruits()
     end
 
     return fruits
-end
-
--- Travel to sea using multiple methods
-function Misc:TravelToSea(seaNumber)
-    local currentSea = self:GetCurrentSea()
-    if currentSea == seaNumber then return true end
-
-    -- Sea place IDs
-    local seaPlaceIds = {
-        [1] = 2753915549,
-        [2] = 4442272183,
-        [3] = 7449423635
-    }
-
-    local targetPlaceId = seaPlaceIds[seaNumber]
-    if not targetPlaceId then return false end
-
-    -- Method 1: Use in-game server browser buttons
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if playerGui then
-        local serverBrowser = playerGui:FindFirstChild("ServerBrowser")
-        if serverBrowser then
-            local frame = serverBrowser:FindFirstChild("Frame")
-            if frame then
-                local teleportButtons = frame:FindFirstChild("TeleportButtons")
-                if teleportButtons then
-                    -- Try different button name patterns
-                    local buttonNames = {
-                        "Sea" .. tostring(seaNumber),
-                        "Sea " .. tostring(seaNumber),
-                        tostring(seaNumber)
-                    }
-
-                    for _, buttonName in ipairs(buttonNames) do
-                        local seaButton = teleportButtons:FindFirstChild(buttonName)
-                        if seaButton then
-                            pcall(function()
-                                -- Try multiple fire methods
-                                if seaButton:IsA("TextButton") then
-                                    if firesignal then
-                                        firesignal(seaButton.Activated)
-                                        firesignal(seaButton.MouseButton1Click)
-                                    end
-                                elseif seaButton:FindFirstChildOfClass("TextButton") then
-                                    local btn = seaButton:FindFirstChildOfClass("TextButton")
-                                    if firesignal then
-                                        firesignal(btn.Activated)
-                                        firesignal(btn.MouseButton1Click)
-                                    end
-                                end
-                            end)
-                            return true
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- Method 2: Use game remote
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then
-            pcall(function()
-                commF:InvokeServer("TravelMain")
-                commF:InvokeServer("TravelDressrosa")
-                commF:InvokeServer("TravelZou")
-            end)
-        end
-    end
-
-    -- Method 3: Direct teleport as fallback
-    pcall(function()
-        TeleportService:Teleport(targetPlaceId, LocalPlayer)
-    end)
-
-    return true
 end
 
 -- Reset character
@@ -435,17 +405,9 @@ function Misc:GetToolMastery()
     }
 end
 
--- Start all enabled features
+-- Start (Anti-AFK is already auto-started in constructor)
 function Misc:Start()
     if self.config then
-        if self.config:Get("Misc", "AntiAFK") then
-            self:StartAntiAFK()
-        end
-
-        if self.config:Get("Misc", "AutoRejoin") then
-            self:StartAutoRejoin()
-        end
-
         if self.config:Get("Misc", "InfiniteEnergy") then
             self:StartInfiniteEnergy()
         end
@@ -456,10 +418,8 @@ function Misc:Start()
     end
 end
 
--- Stop all features
+-- Stop all features (except Anti-AFK which is always on)
 function Misc:Stop()
-    self:StopAntiAFK()
-    self:StopAutoRejoin()
     self:StopInfiniteEnergy()
     self:StopNoClip()
 end
@@ -467,6 +427,7 @@ end
 -- Cleanup
 function Misc:Destroy()
     self:Stop()
+    self.antiAfkEnabled = false
 
     for _, connection in pairs(self.connections) do
         if typeof(connection) == "RBXScriptConnection" then
@@ -478,5 +439,6 @@ function Misc:Destroy()
 end
 
 return {
-    new = Misc.new
+    new = Misc.new,
+    Islands = ISLANDS
 }
