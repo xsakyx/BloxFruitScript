@@ -1,7 +1,10 @@
 --[[
     Combat.lua
-    Combat system using actual game remotes to hit mobs
-    Uses multiple fallback methods for reliable attacks
+    Advanced Combat System using multiple techniques:
+    1. Metatable hooking for remote interception
+    2. Direct module interaction
+    3. Multiple remote fallbacks
+    4. State-aware combat
 ]]
 
 local Combat = {}
@@ -12,16 +15,18 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
-local ATTACK_COOLDOWN = 0.15
-local SKILL_COOLDOWN = 0.5
+local ATTACK_COOLDOWN = 0.1
+local SKILL_COOLDOWN = 0.3
 local HAKI_COOLDOWN = 2
 
--- Cache remotes
+-- Cached references
 local CachedRemotes = {}
+local OldNamecall = nil
 
 function Combat.new(config)
     local self = setmetatable({}, Combat)
@@ -35,7 +40,7 @@ function Combat.new(config)
     self.selectedWeaponType = "Melee"
     self.combatLoop = nil
 
-    -- Cache game remotes on init
+    -- Initialize
     self:CacheRemotes()
 
     return self
@@ -54,33 +59,33 @@ local function GetCharacter()
     return nil, nil, nil
 end
 
--- Cache all relevant remotes
+-- Cache all remotes
 function Combat:CacheRemotes()
     local remotes = ReplicatedStorage:FindFirstChild("Remotes")
     if not remotes then return end
 
-    -- Main combat remote
+    -- Main Blox Fruits remote
     CachedRemotes.CommF = remotes:FindFirstChild("CommF_")
 
-    -- Search for combat-related remotes
-    local remoteNames = {
-        "Damage", "CombatRemote", "AttackEvent", "SwingSword",
-        "SkillRemote", "UseSkill", "ClickDamage", "HitRemote",
-        "AoeDamage", "Combat", "Attack", "MeleeAttack"
-    }
-
-    for _, name in ipairs(remoteNames) do
-        local remote = remotes:FindFirstChild(name)
-        if remote then
-            CachedRemotes[name] = remote
-        end
+    -- Search all remotes
+    for _, remote in pairs(remotes:GetChildren()) do
+        CachedRemotes[remote.Name] = remote
     end
 
-    -- Also search in tool remotes
-    CachedRemotes.ToolRemotes = {}
+    -- Try to find combat-related modules
+    pcall(function()
+        local modules = ReplicatedStorage:FindFirstChild("Modules")
+        if modules then
+            for _, module in pairs(modules:GetChildren()) do
+                if module.Name:lower():find("combat") or module.Name:lower():find("damage") then
+                    CachedRemotes["Module_" .. module.Name] = module
+                end
+            end
+        end
+    end)
 end
 
--- Get all weapons
+-- Get weapons
 function Combat:GetWeapons()
     local weapons = {
         Melee = {},
@@ -115,7 +120,7 @@ function Combat:GetWeapons()
     return weapons
 end
 
--- Get weapon list for dropdown
+-- Get weapon list
 function Combat:GetWeaponList()
     local list = {}
     local weapons = self:GetWeapons()
@@ -129,7 +134,7 @@ function Combat:GetWeaponList()
     return list
 end
 
--- Set weapon type
+-- Set/Get weapon type
 function Combat:SetWeaponType(weaponType)
     self.selectedWeaponType = weaponType
 end
@@ -138,7 +143,7 @@ function Combat:GetWeaponType()
     return self.selectedWeaponType
 end
 
--- Equip weapon of selected type
+-- Equip weapon
 function Combat:EquipSelectedWeapon()
     local character, humanoid = GetCharacter()
     if not humanoid then return false end
@@ -159,7 +164,7 @@ function Combat:EquipSelectedWeapon()
     return false
 end
 
--- Get nearest enemy to attack
+-- Get nearest enemy
 function Combat:GetNearestEnemy()
     local character, _, rootPart = GetCharacter()
     if not rootPart then return nil end
@@ -187,7 +192,7 @@ function Combat:GetNearestEnemy()
     return nearest, nearestDist
 end
 
--- Attack using multiple methods
+-- MAIN ATTACK FUNCTION - Multiple methods
 function Combat:Attack()
     local now = tick()
     if now - self.lastAttackTime < ATTACK_COOLDOWN then return end
@@ -203,78 +208,91 @@ function Combat:Attack()
         return
     end
 
-    -- Get nearest enemy for targeting
+    -- Get target
     local target = self.currentTarget or self:GetNearestEnemy()
+    local targetRoot = nil
+    if target then
+        targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso")
+    end
 
-    -- Method 1: Use CommF_ remote (main Blox Fruits combat remote)
+    -- METHOD 1: Virtual Mouse Click (simulates actual click)
+    pcall(function()
+        -- This actually clicks the mouse which triggers tool attack
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+        task.wait()
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+    end)
+
+    -- METHOD 2: CommF_ with multiple attack patterns
     if CachedRemotes.CommF then
         pcall(function()
-            -- Try different combat calls
+            -- Standard click attack
             CachedRemotes.CommF:InvokeServer("LeftClick", CFrame.new(rootPart.Position))
-            if target then
-                local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso")
-                if targetRoot then
-                    CachedRemotes.CommF:InvokeServer("LeftClick", targetRoot.CFrame)
-                end
+
+            -- With target position
+            if targetRoot then
+                CachedRemotes.CommF:InvokeServer("LeftClick", targetRoot.CFrame)
+                CachedRemotes.CommF:InvokeServer("MeleeAttack", targetRoot.CFrame)
+                CachedRemotes.CommF:InvokeServer("SwingSword", targetRoot.CFrame)
             end
         end)
     end
 
-    -- Method 2: Tool remote events
+    -- METHOD 3: Tool click simulation
     pcall(function()
-        for _, child in pairs(tool:GetDescendants()) do
-            if child:IsA("RemoteEvent") then
-                child:FireServer()
-                if target then
-                    child:FireServer(target)
-                end
-            elseif child:IsA("RemoteFunction") then
-                child:InvokeServer()
+        -- Fire tool's internal events
+        local clickEvent = tool:FindFirstChild("ClickEvent") or tool:FindFirstChild("RemoteEvent")
+        if clickEvent and clickEvent:IsA("RemoteEvent") then
+            clickEvent:FireServer()
+            if target then
+                clickEvent:FireServer(target)
             end
         end
-    end)
 
-    -- Method 3: Tool activation with mouse target
-    pcall(function()
-        local mouse = LocalPlayer:GetMouse()
-        if target then
-            local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso")
-            if targetRoot then
-                -- Set mouse target before activation
-                mouse.TargetFilter = character
-            end
+        -- Try tool RemoteFunction
+        local clickFunc = tool:FindFirstChild("RemoteFunction")
+        if clickFunc then
+            clickFunc:InvokeServer()
         end
+
+        -- Activate tool
         tool:Activate()
     end)
 
-    -- Method 4: Direct damage remotes
-    for _, remoteName in ipairs({"Damage", "CombatRemote", "AttackEvent", "ClickDamage"}) do
-        local remote = CachedRemotes[remoteName]
-        if remote then
-            pcall(function()
-                if remote:IsA("RemoteEvent") then
-                    remote:FireServer()
-                    if target then
-                        remote:FireServer(target)
-                        remote:FireServer(target, target:FindFirstChild("HumanoidRootPart"))
+    -- METHOD 4: Search and fire ALL combat-related remotes
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        for _, remote in pairs(remotes:GetChildren()) do
+            local name = remote.Name:lower()
+            if name:find("click") or name:find("attack") or name:find("swing") or
+               name:find("combat") or name:find("damage") or name:find("melee") then
+                pcall(function()
+                    if remote:IsA("RemoteEvent") then
+                        remote:FireServer()
+                        if target then
+                            remote:FireServer(target)
+                        end
+                        if targetRoot then
+                            remote:FireServer(targetRoot.CFrame)
+                        end
+                    elseif remote:IsA("RemoteFunction") then
+                        remote:InvokeServer()
                     end
-                elseif remote:IsA("RemoteFunction") then
-                    remote:InvokeServer()
-                end
-            end)
+                end)
+            end
         end
     end
 
-    -- Method 5: Search remotes folder for any attack-related remote
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    if remotes then
+    -- METHOD 5: Direct mouse target with firetouchinterest
+    if target and targetRoot then
         pcall(function()
-            for _, remote in pairs(remotes:GetChildren()) do
-                local name = remote.Name:lower()
-                if name:find("attack") or name:find("combat") or name:find("click") or name:find("swing") then
-                    if remote:IsA("RemoteEvent") then
-                        remote:FireServer()
-                    end
+            if firetouchinterest then
+                -- Simulate tool hitting the enemy
+                local handle = tool:FindFirstChild("Handle")
+                if handle then
+                    firetouchinterest(handle, targetRoot, 0)
+                    task.wait()
+                    firetouchinterest(handle, targetRoot, 1)
                 end
             end
         end)
@@ -289,10 +307,17 @@ function Combat:UseSkill(skillKey)
     end
     self.lastSkillTime[skillKey] = now
 
-    if not CachedRemotes.CommF then
-        self:CacheRemotes()
-    end
+    -- Virtual key press
+    pcall(function()
+        local keyCode = Enum.KeyCode[skillKey]
+        if keyCode then
+            VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+            task.wait()
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+        end
+    end)
 
+    -- CommF_ skill
     if CachedRemotes.CommF then
         pcall(function()
             CachedRemotes.CommF:InvokeServer("ActivateSpecial", skillKey)
@@ -320,6 +345,14 @@ function Combat:EnableHaki()
     if not character then return end
     if character:FindFirstChild("HasBuso") then return end
 
+    -- Virtual J key press
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.J, false, game)
+        task.wait()
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.J, false, game)
+    end)
+
+    -- CommF_ Buso
     if CachedRemotes.CommF then
         pcall(function()
             CachedRemotes.CommF:InvokeServer("Buso")
@@ -327,7 +360,7 @@ function Combat:EnableHaki()
     end
 end
 
--- Set target
+-- Set/Get target
 function Combat:SetTarget(target)
     self.currentTarget = target
 end
