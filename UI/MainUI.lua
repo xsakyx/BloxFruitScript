@@ -1,13 +1,13 @@
 --[[
     MainUI.lua
     User Interface using RenLib
-    Provides controls for all script features
+    Updated with weapon selection, fly height, island teleport
+    Removed: Sea teleport, Mob ESP, Anti-AFK toggle (always on)
 ]]
 
 local MainUI = {}
 MainUI.__index = MainUI
 
--- UI Library URL (RenLib or alternative)
 local LIBRARY_URL = "https://raw.githubusercontent.com/xsakyx/RobloxUILib/refs/heads/main/RenLibBêta.lua"
 
 function MainUI.new()
@@ -19,7 +19,7 @@ function MainUI.new()
     self.elements = {}
     self.callbacks = {}
 
-    -- Module references (injected later)
+    -- Module references
     self.config = nil
     self.autoFarm = nil
     self.fruitSniper = nil
@@ -42,14 +42,12 @@ function MainUI:LoadLibrary()
         return true
     else
         warn("[MainUI] Failed to load UI library:", library)
-        -- Create fallback simple UI
         return self:CreateFallbackUI()
     end
 end
 
--- Create fallback UI if library fails to load
+-- Create fallback UI
 function MainUI:CreateFallbackUI()
-    -- Simple screen GUI fallback
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "BloxFruitScript"
     screenGui.ResetOnSpawn = false
@@ -78,14 +76,13 @@ function MainUI:CreateFallbackUI()
     infoLabel.Size = UDim2.new(1, -20, 0, 50)
     infoLabel.Position = UDim2.new(0, 10, 0, 50)
     infoLabel.BackgroundTransparency = 1
-    infoLabel.Text = "UI Library failed to load.\nPlease check your executor.\nScript features are still functional."
+    infoLabel.Text = "UI Library failed to load.\nScript features still functional."
     infoLabel.TextColor3 = Color3.fromRGB(255, 200, 200)
     infoLabel.Font = Enum.Font.Gotham
     infoLabel.TextSize = 14
     infoLabel.TextWrapped = true
     infoLabel.Parent = frame
 
-    -- Protect GUI
     pcall(function()
         screenGui.Parent = game:GetService("CoreGui")
     end)
@@ -127,18 +124,18 @@ function MainUI:CreateWindow()
         }
     })
 
-    -- Create tabs
     self:CreateMainTab()
     self:CreateFarmTab()
     self:CreateCombatTab()
     self:CreateTeleportTab()
+    self:CreateFruitTab()
     self:CreateMiscTab()
     self:CreateSettingsTab()
 
     return true
 end
 
--- Create Main Tab
+-- Main Tab
 function MainUI:CreateMainTab()
     local tab = self.window:CreateTab({
         Name = "Main",
@@ -146,10 +143,8 @@ function MainUI:CreateMainTab()
     })
     self.tabs.main = tab
 
-    -- Status Section
-    local statusSection = tab:CreateSection("Status")
+    tab:CreateSection("Quick Toggles")
 
-    -- Auto Farm Toggle
     tab:CreateToggle({
         Name = "Auto Farm",
         CurrentValue = false,
@@ -171,7 +166,6 @@ function MainUI:CreateMainTab()
         end
     })
 
-    -- Fruit Sniper Toggle
     tab:CreateToggle({
         Name = "Fruit Sniper",
         CurrentValue = false,
@@ -190,7 +184,6 @@ function MainUI:CreateMainTab()
         end
     })
 
-    -- ESP Toggle
     tab:CreateToggle({
         Name = "ESP",
         CurrentValue = false,
@@ -209,14 +202,15 @@ function MainUI:CreateMainTab()
         end
     })
 
-    -- Stats Display
-    tab:CreateParagraph({
+    tab:CreateSection("Status")
+
+    self.elements.statsParagraph = tab:CreateParagraph({
         Title = "Player Stats",
         Content = "Level: 0 | Beli: 0 | Sea: 1"
     })
 end
 
--- Create Farm Tab
+-- Farm Tab
 function MainUI:CreateFarmTab()
     local tab = self.window:CreateTab({
         Name = "Farm",
@@ -224,27 +218,41 @@ function MainUI:CreateFarmTab()
     })
     self.tabs.farm = tab
 
-    -- Quest Settings Section
-    local questSection = tab:CreateSection("Quest Settings")
+    tab:CreateSection("Auto Farm Settings")
 
-    tab:CreateToggle({
-        Name = "Auto Select Quest",
-        CurrentValue = true,
-        Flag = "AutoSelectQuest",
-        Callback = function(value)
+    -- Weapon Type Dropdown
+    tab:CreateDropdown({
+        Name = "Weapon Type",
+        Options = {"Melee", "Sword", "Demon Fruit"},
+        CurrentOption = {"Melee"},
+        Flag = "WeaponType",
+        Callback = function(option)
+            local selected = option[1] or option
             if self.config then
-                self.config:Set("Quest", "AutoSelectQuest", value)
+                self.config:Set("Combat", "WeaponType", selected)
+            end
+            if self.autoFarm then
+                self.autoFarm:SetWeaponType(selected)
+            end
+            if self.combat then
+                self.combat:SetWeaponType(selected)
             end
         end
     })
 
-    tab:CreateToggle({
-        Name = "Skip Bosses",
-        CurrentValue = false,
-        Flag = "SkipBosses",
+    -- Fly Height Slider
+    tab:CreateSlider({
+        Name = "Fly Height (Above Mobs)",
+        Range = {5, 50},
+        Increment = 1,
+        CurrentValue = 15,
+        Flag = "FlyHeight",
         Callback = function(value)
             if self.config then
-                self.config:Set("Quest", "SkipBosses", value)
+                self.config:Set("AutoFarm", "FlyHeight", value)
+            end
+            if self.autoFarm then
+                self.autoFarm:SetFlyHeight(value)
             end
         end
     })
@@ -262,46 +270,19 @@ function MainUI:CreateFarmTab()
 
     tab:CreateSlider({
         Name = "Bring Distance",
-        Range = {20, 200},
-        Increment = 5,
-        CurrentValue = 80,
+        Range = {50, 300},
+        Increment = 10,
+        CurrentValue = 150,
         Flag = "BringDistance",
         Callback = function(value)
             if self.config then
-                self.config:Set("General", "BringDistance", value)
-            end
-        end
-    })
-
-    -- Mastery Section
-    local masterySection = tab:CreateSection("Mastery Farm")
-
-    tab:CreateToggle({
-        Name = "Mastery Farm",
-        CurrentValue = false,
-        Flag = "MasteryFarm",
-        Callback = function(value)
-            if self.config then
-                self.config:Set("General", "MasteryFarm", value)
-            end
-        end
-    })
-
-    tab:CreateSlider({
-        Name = "Target Mastery",
-        Range = {1, 600},
-        Increment = 1,
-        CurrentValue = 600,
-        Flag = "TargetMastery",
-        Callback = function(value)
-            if self.config then
-                self.config:Set("Mastery", "TargetMastery", value)
+                self.config:Set("AutoFarm", "BringDistance", value)
             end
         end
     })
 end
 
--- Create Combat Tab
+-- Combat Tab
 function MainUI:CreateCombatTab()
     local tab = self.window:CreateTab({
         Name = "Combat",
@@ -309,7 +290,7 @@ function MainUI:CreateCombatTab()
     })
     self.tabs.combat = tab
 
-    local combatSection = tab:CreateSection("Combat Settings")
+    tab:CreateSection("Combat Settings")
 
     tab:CreateToggle({
         Name = "Auto Attack",
@@ -323,7 +304,7 @@ function MainUI:CreateCombatTab()
     })
 
     tab:CreateToggle({
-        Name = "Auto Skills",
+        Name = "Auto Skills (Z, X, C, V)",
         CurrentValue = true,
         Flag = "AutoSkills",
         Callback = function(value)
@@ -343,27 +324,9 @@ function MainUI:CreateCombatTab()
             end
         end
     })
-
-    -- Skill toggles
-    local skillsSection = tab:CreateSection("Skills")
-
-    for _, key in ipairs({"Z", "X", "C", "V", "F"}) do
-        tab:CreateToggle({
-            Name = "Use " .. key .. " Skill",
-            CurrentValue = key == "Z" or key == "X",
-            Flag = "Skill" .. key,
-            Callback = function(value)
-                if self.config then
-                    local skills = self.config:Get("Combat", "SkillsEnabled") or {}
-                    skills[key] = value
-                    self.config:Set("Combat", "SkillsEnabled", skills)
-                end
-            end
-        })
-    end
 end
 
--- Create Teleport Tab
+-- Teleport Tab
 function MainUI:CreateTeleportTab()
     local tab = self.window:CreateTab({
         Name = "Teleport",
@@ -371,7 +334,40 @@ function MainUI:CreateTeleportTab()
     })
     self.tabs.teleport = tab
 
-    local tpSection = tab:CreateSection("Teleport Settings")
+    tab:CreateSection("Island Teleport")
+
+    -- Get island list from Misc module
+    local islandList = {}
+    if self.misc then
+        islandList = self.misc:GetIslandList()
+    else
+        islandList = {"Starter Island", "Jungle", "Pirate Village", "Desert", "Frozen Village"}
+    end
+
+    tab:CreateDropdown({
+        Name = "Select Island",
+        Options = islandList,
+        CurrentOption = {},
+        Flag = "SelectedIsland",
+        Callback = function(option)
+            -- Just stores selection
+        end
+    })
+
+    tab:CreateButton({
+        Name = "Teleport to Island",
+        Callback = function()
+            if self.misc then
+                local selectedIsland = self.window.Flags.SelectedIsland
+                if selectedIsland then
+                    local island = type(selectedIsland) == "table" and selectedIsland[1] or selectedIsland
+                    self.misc:TeleportToIsland(island)
+                end
+            end
+        end
+    })
+
+    tab:CreateSection("Tween Settings")
 
     tab:CreateSlider({
         Name = "Tween Speed",
@@ -385,50 +381,80 @@ function MainUI:CreateTeleportTab()
             end
         end
     })
+end
+
+-- Fruit Tab
+function MainUI:CreateFruitTab()
+    local tab = self.window:CreateTab({
+        Name = "Fruits",
+        Icon = "apple"
+    })
+    self.tabs.fruit = tab
+
+    tab:CreateSection("Fruit Sniper Settings")
 
     tab:CreateToggle({
-        Name = "Bypass Walls",
+        Name = "Auto Collect Fruits",
         CurrentValue = true,
-        Flag = "BypassWalls",
+        Flag = "AutoCollect",
         Callback = function(value)
             if self.config then
-                self.config:Set("Teleport", "BypassWalls", value)
+                self.config:Set("FruitSniper", "AutoCollect", value)
             end
         end
     })
 
-    -- Sea travel
-    local seaSection = tab:CreateSection("Sea Travel")
-
-    tab:CreateButton({
-        Name = "Travel to Sea 1",
-        Callback = function()
-            if self.misc then
-                self.misc:TravelToSea(1)
+    tab:CreateToggle({
+        Name = "Auto Store Fruits",
+        CurrentValue = false,
+        Flag = "AutoStore",
+        Callback = function(value)
+            if self.config then
+                self.config:Set("FruitSniper", "AutoStore", value)
+            end
+            if self.fruitSniper then
+                self.fruitSniper:SetAutoStore(value)
             end
         end
     })
 
-    tab:CreateButton({
-        Name = "Travel to Sea 2",
-        Callback = function()
-            if self.misc then
-                self.misc:TravelToSea(2)
+    tab:CreateToggle({
+        Name = "Server Hop (No Fruits)",
+        CurrentValue = false,
+        Flag = "ServerHopFruit",
+        Callback = function(value)
+            if self.config then
+                self.config:Set("FruitSniper", "ServerHop", value)
             end
         end
     })
 
-    tab:CreateButton({
-        Name = "Travel to Sea 3",
-        Callback = function()
-            if self.misc then
-                self.misc:TravelToSea(3)
+    tab:CreateSection("Fruit Filter")
+
+    tab:CreateToggle({
+        Name = "Only Mythical Fruits",
+        CurrentValue = false,
+        Flag = "OnlyMythical",
+        Callback = function(value)
+            if self.config then
+                self.config:Set("FruitSniper", "OnlyMythical", value)
+            end
+        end
+    })
+
+    tab:CreateToggle({
+        Name = "Only Legendary+",
+        CurrentValue = false,
+        Flag = "OnlyLegendary",
+        Callback = function(value)
+            if self.config then
+                self.config:Set("FruitSniper", "OnlyLegendary", value)
             end
         end
     })
 end
 
--- Create Misc Tab
+-- Misc Tab
 function MainUI:CreateMiscTab()
     local tab = self.window:CreateTab({
         Name = "Misc",
@@ -436,64 +462,7 @@ function MainUI:CreateMiscTab()
     })
     self.tabs.misc = tab
 
-    local miscSection = tab:CreateSection("Utilities")
-
-    tab:CreateToggle({
-        Name = "Anti-AFK",
-        CurrentValue = true,
-        Flag = "AntiAFK",
-        Callback = function(value)
-            if self.config then
-                self.config:Set("Misc", "AntiAFK", value)
-            end
-            if self.misc then
-                if value then
-                    self.misc:StartAntiAFK()
-                else
-                    self.misc:StopAntiAFK()
-                end
-            end
-        end
-    })
-
-    tab:CreateToggle({
-        Name = "Auto Rejoin",
-        CurrentValue = true,
-        Flag = "AutoRejoin",
-        Callback = function(value)
-            if self.config then
-                self.config:Set("Misc", "AutoRejoin", value)
-            end
-            if self.misc then
-                if value then
-                    self.misc:StartAutoRejoin()
-                else
-                    self.misc:StopAutoRejoin()
-                end
-            end
-        end
-    })
-
-    tab:CreateToggle({
-        Name = "No Clip",
-        CurrentValue = false,
-        Flag = "NoClip",
-        Callback = function(value)
-            if self.config then
-                self.config:Set("Misc", "NoClip", value)
-            end
-            if self.misc then
-                if value then
-                    self.misc:StartNoClip()
-                else
-                    self.misc:StopNoClip()
-                end
-            end
-        end
-    })
-
-    -- ESP Section
-    local espSection = tab:CreateSection("ESP Settings")
+    tab:CreateSection("ESP Settings")
 
     tab:CreateToggle({
         Name = "Fruit ESP",
@@ -513,17 +482,6 @@ function MainUI:CreateMiscTab()
         Callback = function(value)
             if self.config then
                 self.config:Set("ESP", "PlayerESP", value)
-            end
-        end
-    })
-
-    tab:CreateToggle({
-        Name = "Mob ESP",
-        CurrentValue = false,
-        Flag = "MobESP",
-        Callback = function(value)
-            if self.config then
-                self.config:Set("ESP", "MobESP", value)
             end
         end
     })
@@ -550,8 +508,49 @@ function MainUI:CreateMiscTab()
         end
     })
 
-    -- Buttons
-    local actionsSection = tab:CreateSection("Actions")
+    tab:CreateToggle({
+        Name = "Show Distance",
+        CurrentValue = true,
+        Flag = "ShowDistance",
+        Callback = function(value)
+            if self.config then
+                self.config:Set("ESP", "ShowDistance", value)
+            end
+        end
+    })
+
+    tab:CreateSection("Utilities")
+
+    tab:CreateToggle({
+        Name = "No Clip",
+        CurrentValue = false,
+        Flag = "NoClip",
+        Callback = function(value)
+            if self.config then
+                self.config:Set("Misc", "NoClip", value)
+            end
+            if self.misc then
+                if value then
+                    self.misc:StartNoClip()
+                else
+                    self.misc:StopNoClip()
+                end
+            end
+        end
+    })
+
+    tab:CreateToggle({
+        Name = "Full Bright",
+        CurrentValue = false,
+        Flag = "FullBright",
+        Callback = function(value)
+            if self.misc then
+                self.misc:SetFullBright(value)
+            end
+        end
+    })
+
+    tab:CreateSection("Actions")
 
     tab:CreateButton({
         Name = "Server Hop",
@@ -579,9 +578,15 @@ function MainUI:CreateMiscTab()
             end
         end
     })
+
+    -- Info about Anti-AFK
+    tab:CreateParagraph({
+        Title = "Anti-AFK",
+        Content = "Anti-AFK is always enabled automatically."
+    })
 end
 
--- Create Settings Tab
+-- Settings Tab
 function MainUI:CreateSettingsTab()
     local tab = self.window:CreateTab({
         Name = "Settings",
@@ -589,7 +594,7 @@ function MainUI:CreateSettingsTab()
     })
     self.tabs.settings = tab
 
-    local configSection = tab:CreateSection("Configuration")
+    tab:CreateSection("Configuration")
 
     tab:CreateButton({
         Name = "Save Config",
@@ -597,7 +602,7 @@ function MainUI:CreateSettingsTab()
             if self.config then
                 local success = self.config:Save()
                 if self.misc then
-                    self.misc:Notify("Config", success and "Config saved!" or "Failed to save config")
+                    self.misc:Notify("Config", success and "Config saved!" or "Failed to save")
                 end
             end
         end
@@ -609,7 +614,7 @@ function MainUI:CreateSettingsTab()
             if self.config then
                 local success = self.config:Load()
                 if self.misc then
-                    self.misc:Notify("Config", success and "Config loaded!" or "Failed to load config")
+                    self.misc:Notify("Config", success and "Config loaded!" or "Failed to load")
                 end
             end
         end
@@ -621,18 +626,17 @@ function MainUI:CreateSettingsTab()
             if self.config then
                 self.config:ResetToDefault()
                 if self.misc then
-                    self.misc:Notify("Config", "Config reset to default")
+                    self.misc:Notify("Config", "Reset to default")
                 end
             end
         end
     })
 
-    -- UI Settings
-    local uiSection = tab:CreateSection("UI Settings")
+    tab:CreateSection("UI")
 
     tab:CreateKeybind({
         Name = "Toggle UI",
-        CurrentKeybind = "RightControl",
+        CurrentKeybind = "K",
         Flag = "ToggleUI",
         Callback = function()
             if self.window then
@@ -642,7 +646,7 @@ function MainUI:CreateSettingsTab()
     })
 end
 
--- Show/Hide window
+-- Show/Hide
 function MainUI:Toggle()
     if self.window then
         self.window:Toggle()
@@ -651,29 +655,32 @@ function MainUI:Toggle()
     end
 end
 
--- Update stats display
+-- Update stats
 function MainUI:UpdateStats(stats)
-    if not self.tabs.main then return end
-
-    local content = string.format(
-        "Level: %d | Beli: %s | Sea: %d\nFragments: %d | Bounty: %s",
-        stats.Level or 0,
-        tostring(stats.Beli or 0),
-        stats.CurrentSea or 1,
-        stats.Fragments or 0,
-        tostring(stats.Bounty or 0)
-    )
-
-    -- Update paragraph if it exists
-    -- (This would need the element reference stored)
+    if self.elements.statsParagraph and self.elements.statsParagraph.Set then
+        local content = string.format(
+            "Level: %d | Beli: %s | Sea: %d\nFragments: %d | Bounty: %s",
+            stats.Level or 0,
+            tostring(stats.Beli or 0),
+            stats.CurrentSea or 1,
+            stats.Fragments or 0,
+            tostring(stats.Bounty or 0)
+        )
+        pcall(function()
+            self.elements.statsParagraph:Set({
+                Title = "Player Stats",
+                Content = content
+            })
+        end)
+    end
 end
 
--- Set callback
+-- Callback
 function MainUI:OnToggle(name, callback)
     self.callbacks["on" .. name .. "Toggle"] = callback
 end
 
--- Initialize and show UI
+-- Initialize
 function MainUI:Init()
     if self:LoadLibrary() then
         self:CreateWindow()
@@ -683,13 +690,11 @@ end
 -- Cleanup
 function MainUI:Destroy()
     if self.window then
-        self.window:Destroy()
+        pcall(function() self.window:Destroy() end)
     end
-
     if self.fallbackGui then
         self.fallbackGui:Destroy()
     end
-
     self.callbacks = {}
 end
 
