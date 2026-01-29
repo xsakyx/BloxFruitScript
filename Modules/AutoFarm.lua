@@ -375,7 +375,7 @@ function AutoFarm:FindEnemy(mobName)
     return closest, closestDistance
 end
 
--- Group all nearby mobs to a central position
+-- Group all nearby mobs to a central position and anchor them
 function AutoFarm:GroupMobs(mobName, centerPosition)
     local enemies = self:FindAllEnemies(mobName)
     local bringDistance = self.config and self.config:Get("AutoFarm", "BringDistance") or DEFAULT_BRING_DISTANCE
@@ -385,7 +385,7 @@ function AutoFarm:GroupMobs(mobName, centerPosition)
         local distance = (data.RootPart.Position - centerPosition).Magnitude
         if distance <= bringDistance then
             pcall(function()
-                -- Teleport enemy to center with small random offset to prevent stacking
+                -- Teleport enemy to center with small random offset
                 local offset = Vector3.new(
                     math.random(-MOB_GROUP_RADIUS, MOB_GROUP_RADIUS),
                     0,
@@ -394,6 +394,22 @@ function AutoFarm:GroupMobs(mobName, centerPosition)
                 data.RootPart.CFrame = CFrame.new(centerPosition + offset)
                 data.RootPart.Velocity = Vector3.new(0, 0, 0)
                 data.RootPart.CanCollide = false
+
+                -- ANCHOR the mob so it stops moving completely
+                data.RootPart.Anchored = true
+
+                -- Also expand hitbox for easier hitting (invisible expansion)
+                -- Create or update hitbox expansion
+                local hitboxSize = 50
+                data.RootPart.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                data.RootPart.Transparency = 1 -- Make the expanded part invisible
+
+                -- Disable all other parts collision
+                for _, part in pairs(data.Entity:GetDescendants()) do
+                    if part:IsA("BasePart") and part ~= data.RootPart then
+                        part.CanCollide = false
+                    end
+                end
             end)
             groupedCount = groupedCount + 1
         end

@@ -1,7 +1,7 @@
 --[[
     Combat.lua
-    Combat system using game remotes (no input blocking)
-    Features: Weapon selection, skills, haki via game APIs
+    Combat system using actual game remotes to hit mobs
+    Uses multiple fallback methods for reliable attacks
 ]]
 
 local Combat = {}
@@ -16,9 +16,12 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
-local ATTACK_COOLDOWN = 0.1
-local SKILL_COOLDOWN = 0.3
-local HAKI_COOLDOWN = 1
+local ATTACK_COOLDOWN = 0.15
+local SKILL_COOLDOWN = 0.5
+local HAKI_COOLDOWN = 2
+
+-- Cache remotes
+local CachedRemotes = {}
 
 function Combat.new(config)
     local self = setmetatable({}, Combat)
@@ -29,8 +32,11 @@ function Combat.new(config)
     self.lastAttackTime = 0
     self.lastSkillTime = {}
     self.lastHakiTime = 0
-    self.selectedWeaponType = "Melee" -- "Melee", "Sword", or "Demon Fruit"
+    self.selectedWeaponType = "Melee"
     self.combatLoop = nil
+
+    -- Cache game remotes on init
+    self:CacheRemotes()
 
     return self
 end
@@ -48,7 +54,33 @@ local function GetCharacter()
     return nil, nil, nil
 end
 
--- Get all weapons from backpack and character
+-- Cache all relevant remotes
+function Combat:CacheRemotes()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then return end
+
+    -- Main combat remote
+    CachedRemotes.CommF = remotes:FindFirstChild("CommF_")
+
+    -- Search for combat-related remotes
+    local remoteNames = {
+        "Damage", "CombatRemote", "AttackEvent", "SwingSword",
+        "SkillRemote", "UseSkill", "ClickDamage", "HitRemote",
+        "AoeDamage", "Combat", "Attack", "MeleeAttack"
+    }
+
+    for _, name in ipairs(remoteNames) do
+        local remote = remotes:FindFirstChild(name)
+        if remote then
+            CachedRemotes[name] = remote
+        end
+    end
+
+    -- Also search in tool remotes
+    CachedRemotes.ToolRemotes = {}
+end
+
+-- Get all weapons
 function Combat:GetWeapons()
     local weapons = {
         Melee = {},
@@ -68,14 +100,12 @@ function Combat:GetWeapons()
         end
     end
 
-    -- Check backpack
     if backpack then
         for _, item in pairs(backpack:GetChildren()) do
             checkTool(item)
         end
     end
 
-    -- Check character (equipped tools)
     if character then
         for _, item in pairs(character:GetChildren()) do
             checkTool(item)
@@ -92,37 +122,18 @@ function Combat:GetWeaponList()
 
     for weaponType, tools in pairs(weapons) do
         for _, tool in ipairs(tools) do
-            table.insert(list, {
-                Name = tool.Name,
-                Type = weaponType,
-                Tool = tool
-            })
+            table.insert(list, tool.Name .. " (" .. weaponType .. ")")
         end
     end
 
     return list
 end
 
--- Get weapon names by type for dropdown
-function Combat:GetWeaponNamesByType(weaponType)
-    local names = {}
-    local weapons = self:GetWeapons()
-
-    if weapons[weaponType] then
-        for _, tool in ipairs(weapons[weaponType]) do
-            table.insert(names, tool.Name)
-        end
-    end
-
-    return names
-end
-
--- Set selected weapon type
+-- Set weapon type
 function Combat:SetWeaponType(weaponType)
     self.selectedWeaponType = weaponType
 end
 
--- Get selected weapon type
 function Combat:GetWeaponType()
     return self.selectedWeaponType
 end
@@ -137,10 +148,8 @@ function Combat:EquipSelectedWeapon()
 
     if weapons[weaponType] and #weapons[weaponType] > 0 then
         local tool = weapons[weaponType][1]
-        -- Check if already equipped
         if tool.Parent == character then return true end
 
-        -- Equip the tool
         pcall(function()
             humanoid:EquipTool(tool)
         end)
@@ -150,66 +159,129 @@ function Combat:EquipSelectedWeapon()
     return false
 end
 
--- Equip specific weapon by name
-function Combat:EquipWeaponByName(weaponName)
-    local character, humanoid = GetCharacter()
-    if not humanoid then return false end
+-- Get nearest enemy to attack
+function Combat:GetNearestEnemy()
+    local character, _, rootPart = GetCharacter()
+    if not rootPart then return nil end
 
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
 
-    -- Check backpack
-    if backpack then
-        local tool = backpack:FindFirstChild(weaponName)
-        if tool and tool:IsA("Tool") then
-            pcall(function()
-                humanoid:EquipTool(tool)
-            end)
-            return true
+    local nearest = nil
+    local nearestDist = math.huge
+
+    for _, enemy in pairs(enemies:GetChildren()) do
+        local humanoid = enemy:FindFirstChild("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChild("Torso")
+            if enemyRoot then
+                local dist = (rootPart.Position - enemyRoot.Position).Magnitude
+                if dist < nearestDist then
+                    nearest = enemy
+                    nearestDist = dist
+                end
+            end
         end
     end
 
-    -- Check if already equipped
-    if character then
-        local tool = character:FindFirstChild(weaponName)
-        if tool and tool:IsA("Tool") then
-            return true
-        end
-    end
-
-    return false
+    return nearest, nearestDist
 end
 
--- Attack using game remotes (doesn't block input)
+-- Attack using multiple methods
 function Combat:Attack()
     local now = tick()
     if now - self.lastAttackTime < ATTACK_COOLDOWN then return end
     self.lastAttackTime = now
 
-    local character = GetCharacter()
-    if not character then return end
+    local character, _, rootPart = GetCharacter()
+    if not character or not rootPart then return end
 
-    -- Find equipped tool
+    -- Get equipped tool
     local tool = character:FindFirstChildOfClass("Tool")
     if not tool then
         self:EquipSelectedWeapon()
         return
     end
 
-    -- Activate tool (this triggers the weapon's attack)
+    -- Get nearest enemy for targeting
+    local target = self.currentTarget or self:GetNearestEnemy()
+
+    -- Method 1: Use CommF_ remote (main Blox Fruits combat remote)
+    if CachedRemotes.CommF then
+        pcall(function()
+            -- Try different combat calls
+            CachedRemotes.CommF:InvokeServer("LeftClick", CFrame.new(rootPart.Position))
+            if target then
+                local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso")
+                if targetRoot then
+                    CachedRemotes.CommF:InvokeServer("LeftClick", targetRoot.CFrame)
+                end
+            end
+        end)
+    end
+
+    -- Method 2: Tool remote events
     pcall(function()
+        for _, child in pairs(tool:GetDescendants()) do
+            if child:IsA("RemoteEvent") then
+                child:FireServer()
+                if target then
+                    child:FireServer(target)
+                end
+            elseif child:IsA("RemoteFunction") then
+                child:InvokeServer()
+            end
+        end
+    end)
+
+    -- Method 3: Tool activation with mouse target
+    pcall(function()
+        local mouse = LocalPlayer:GetMouse()
+        if target then
+            local targetRoot = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Torso")
+            if targetRoot then
+                -- Set mouse target before activation
+                mouse.TargetFilter = character
+            end
+        end
         tool:Activate()
     end)
 
-    -- Also try remote events on the tool
-    pcall(function()
-        local remote = tool:FindFirstChildOfClass("RemoteEvent")
+    -- Method 4: Direct damage remotes
+    for _, remoteName in ipairs({"Damage", "CombatRemote", "AttackEvent", "ClickDamage"}) do
+        local remote = CachedRemotes[remoteName]
         if remote then
-            remote:FireServer()
+            pcall(function()
+                if remote:IsA("RemoteEvent") then
+                    remote:FireServer()
+                    if target then
+                        remote:FireServer(target)
+                        remote:FireServer(target, target:FindFirstChild("HumanoidRootPart"))
+                    end
+                elseif remote:IsA("RemoteFunction") then
+                    remote:InvokeServer()
+                end
+            end)
         end
-    end)
+    end
+
+    -- Method 5: Search remotes folder for any attack-related remote
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        pcall(function()
+            for _, remote in pairs(remotes:GetChildren()) do
+                local name = remote.Name:lower()
+                if name:find("attack") or name:find("combat") or name:find("click") or name:find("swing") then
+                    if remote:IsA("RemoteEvent") then
+                        remote:FireServer()
+                    end
+                end
+            end
+        end)
+    end
 end
 
--- Use skill via game remote
+-- Use skill
 function Combat:UseSkill(skillKey)
     local now = tick()
     if self.lastSkillTime[skillKey] and now - self.lastSkillTime[skillKey] < SKILL_COOLDOWN then
@@ -217,15 +289,14 @@ function Combat:UseSkill(skillKey)
     end
     self.lastSkillTime[skillKey] = now
 
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    if not remotes then return false end
+    if not CachedRemotes.CommF then
+        self:CacheRemotes()
+    end
 
-    local commF = remotes:FindFirstChild("CommF_")
-    if commF then
+    if CachedRemotes.CommF then
         pcall(function()
-            -- Try different skill invocation methods
-            commF:InvokeServer("Skill" .. skillKey)
-            commF:InvokeServer("UseSkill", skillKey)
+            CachedRemotes.CommF:InvokeServer("ActivateSpecial", skillKey)
+            CachedRemotes.CommF:InvokeServer("Skill" .. skillKey)
         end)
     end
 
@@ -234,14 +305,12 @@ end
 
 -- Use all skills
 function Combat:UseAllSkills()
-    local skills = {"Z", "X", "C", "V"}
-    for _, skill in ipairs(skills) do
+    for _, skill in ipairs({"Z", "X", "C", "V"}) do
         self:UseSkill(skill)
-        task.wait(0.05)
     end
 end
 
--- Enable Haki using game remote
+-- Enable Haki
 function Combat:EnableHaki()
     local now = tick()
     if now - self.lastHakiTime < HAKI_COOLDOWN then return end
@@ -249,45 +318,20 @@ function Combat:EnableHaki()
 
     local character = GetCharacter()
     if not character then return end
-
-    -- Check if already has Haki
     if character:FindFirstChild("HasBuso") then return end
 
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    if remotes then
-        local commF = remotes:FindFirstChild("CommF_")
-        if commF then
-            pcall(function()
-                commF:InvokeServer("Buso")
-            end)
-        end
-    end
-end
-
--- Disable hitbox expansion (not visual)
-function Combat:ExpandHitbox(entity, size)
-    -- Don't expand visual hitbox, just disable collision
-    if not entity then return end
-
-    local rootPart = entity:FindFirstChild("HumanoidRootPart") or entity:FindFirstChild("Torso")
-    if rootPart then
+    if CachedRemotes.CommF then
         pcall(function()
-            rootPart.CanCollide = false
+            CachedRemotes.CommF:InvokeServer("Buso")
         end)
     end
 end
 
--- Restore hitbox (no-op since we don't change size)
-function Combat:RestoreHitbox(entity)
-    -- Nothing to restore since we only disable collision
-end
-
--- Set current target
+-- Set target
 function Combat:SetTarget(target)
     self.currentTarget = target
 end
 
--- Get current target
 function Combat:GetTarget()
     return self.currentTarget
 end
@@ -297,22 +341,19 @@ function Combat:Start(mobName)
     if self.enabled then return end
     self.enabled = true
 
+    self:CacheRemotes()
+
     self.combatLoop = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
 
         pcall(function()
-            -- Equip weapon
             self:EquipSelectedWeapon()
-
-            -- Attack
             self:Attack()
 
-            -- Use skills if configured
             if self.config and self.config:Get("Combat", "AutoSkills") then
                 self:UseAllSkills()
             end
 
-            -- Enable Haki if configured
             if self.config and self.config:Get("Combat", "AutoHaki") then
                 self:EnableHaki()
             end
@@ -332,12 +373,10 @@ function Combat:Stop()
     self.currentTarget = nil
 end
 
--- Check if combat is active
 function Combat:IsActive()
     return self.enabled
 end
 
--- Cleanup
 function Combat:Destroy()
     self:Stop()
 end

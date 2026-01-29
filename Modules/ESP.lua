@@ -16,8 +16,16 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 -- Constants
-local UPDATE_INTERVAL = 1 -- Slower updates for performance
-local MAX_ESP_OBJECTS = 30 -- Reduced limit
+local UPDATE_INTERVAL = 0.5 -- Faster updates
+local MAX_ESP_OBJECTS = 100 -- Increased limit
+
+-- Increased default distances (not affected by graphics)
+local DEFAULT_DISTANCES = {
+    Player = 2000,
+    Boss = 5000,
+    Fruit = 10000,
+    Chest = 1000
+}
 
 local DEFAULT_COLORS = {
     Player = Color3.fromRGB(255, 0, 0),
@@ -199,7 +207,7 @@ end
 function ESP:UpdatePlayerESP()
     if not self.config or not self.config:Get("ESP", "PlayerESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "PlayerDistance") or 500
+    local maxDistance = self.config:Get("ESP", "PlayerDistance") or DEFAULT_DISTANCES.Player
     local showDistance = self.config:Get("ESP", "ShowDistance")
 
     -- Players are in workspace.Characters as models named by username
@@ -236,7 +244,7 @@ end
 function ESP:UpdateBossESP()
     if not self.config or not self.config:Get("ESP", "BossESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "BossDistance") or 1000
+    local maxDistance = self.config:Get("ESP", "BossDistance") or DEFAULT_DISTANCES.Boss
     local showDistance = self.config:Get("ESP", "ShowDistance")
 
     local enemies = Workspace:FindFirstChild("Enemies")
@@ -281,7 +289,7 @@ end
 function ESP:UpdateFruitESP()
     if not self.config or not self.config:Get("ESP", "FruitESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "FruitDistance") or 5000
+    local maxDistance = self.config:Get("ESP", "FruitDistance") or DEFAULT_DISTANCES.Fruit
     local showDistance = self.config:Get("ESP", "ShowDistance")
 
     -- Scan workspace direct children for fruit tools
@@ -332,7 +340,7 @@ end
 function ESP:UpdateChestESP()
     if not self.config or not self.config:Get("ESP", "ChestESP") then return end
 
-    local maxDistance = self.config:Get("ESP", "ChestDistance") or 300
+    local maxDistance = self.config:Get("ESP", "ChestDistance") or DEFAULT_DISTANCES.Chest
     local showDistance = self.config:Get("ESP", "ShowDistance")
 
     local map = Workspace:FindFirstChild("Map")
