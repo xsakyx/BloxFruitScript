@@ -1,7 +1,16 @@
 --[[
     AutoFarm.lua
-    Main farming logic - Quest selection, navigation, combat, turn-in
-    Features: Continuous farming, noclip, weapon selection, mob grouping
+    Professional Auto Farm System
+
+    Features:
+    - Continuous farming with no time limit
+    - Configurable hitbox expansion
+    - Configurable mob anchoring
+    - Weapon type selection
+    - Fly height customization
+    - Bring distance customization
+    - NoClip during farming
+    - State machine architecture
 ]]
 
 local AutoFarm = {}
@@ -24,7 +33,8 @@ local Config
 -- Default settings
 local DEFAULT_FLY_HEIGHT = 15
 local DEFAULT_BRING_DISTANCE = 150
-local MOB_GROUP_RADIUS = 5 -- How close to group enemies
+local DEFAULT_HITBOX_SIZE = 50
+local MOB_GROUP_RADIUS = 5
 
 function AutoFarm.new(config, teleport, combat, stateManager)
     local self = setmetatable({}, AutoFarm)
@@ -48,11 +58,19 @@ function AutoFarm.new(config, teleport, combat, stateManager)
     self.mobKillCount = 0
     self.requiredKills = 0
     self.farmPosition = nil
-    self.selectedWeaponType = "Melee" -- Default weapon type
+    self.selectedWeaponType = "Melee"
+
+    -- Configurable options
+    self.flyHeight = DEFAULT_FLY_HEIGHT
+    self.bringDistance = DEFAULT_BRING_DISTANCE
+    self.hitboxSize = DEFAULT_HITBOX_SIZE
+    self.expandHitbox = true
+    self.anchorMobs = true
+    self.bringMobs = true
 
     self.mainLoop = nil
     self.noclipLoop = nil
-    self.noclipEnabled = true -- Always enabled during farming
+    self.noclipEnabled = true
 
     self.callbacks = {
         onQuestStart = nil,
@@ -130,6 +148,7 @@ function AutoFarm:StartNoclip()
 
     self.noclipLoop = RunService.Stepped:Connect(function()
         if not self.enabled then return end
+        if not self.noclipEnabled then return end
         self:EnableNoclip()
     end)
 end
@@ -149,7 +168,6 @@ function AutoFarm:SetWeaponType(weaponType)
     end
 end
 
--- Get weapon type
 function AutoFarm:GetWeaponType()
     return self.selectedWeaponType
 end
@@ -159,9 +177,62 @@ function AutoFarm:SetFlyHeight(height)
     self.flyHeight = height
 end
 
--- Get fly height
 function AutoFarm:GetFlyHeight()
-    return self.flyHeight or self.config:Get("AutoFarm", "FlyHeight") or DEFAULT_FLY_HEIGHT
+    return self.flyHeight or (self.config and self.config:Get("AutoFarm", "FlyHeight")) or DEFAULT_FLY_HEIGHT
+end
+
+-- Set bring distance
+function AutoFarm:SetBringDistance(distance)
+    self.bringDistance = distance
+end
+
+function AutoFarm:GetBringDistance()
+    return self.bringDistance or (self.config and self.config:Get("AutoFarm", "BringDistance")) or DEFAULT_BRING_DISTANCE
+end
+
+-- Set hitbox expansion
+function AutoFarm:SetExpandHitbox(enabled)
+    self.expandHitbox = enabled
+end
+
+function AutoFarm:GetExpandHitbox()
+    if self.config then
+        return self.config:Get("AutoFarm", "ExpandHitbox")
+    end
+    return self.expandHitbox
+end
+
+-- Set hitbox size
+function AutoFarm:SetHitboxSize(size)
+    self.hitboxSize = size
+end
+
+function AutoFarm:GetHitboxSize()
+    return self.hitboxSize or (self.config and self.config:Get("AutoFarm", "HitboxSize")) or DEFAULT_HITBOX_SIZE
+end
+
+-- Set mob anchoring
+function AutoFarm:SetAnchorMobs(enabled)
+    self.anchorMobs = enabled
+end
+
+function AutoFarm:GetAnchorMobs()
+    if self.config then
+        return self.config:Get("AutoFarm", "AnchorMobs")
+    end
+    return self.anchorMobs
+end
+
+-- Set bring mobs
+function AutoFarm:SetBringMobs(enabled)
+    self.bringMobs = enabled
+end
+
+function AutoFarm:GetBringMobs()
+    if self.config then
+        return self.config:Get("AutoFarm", "BringMobs")
+    end
+    return self.bringMobs
 end
 
 -- Check if player has an active quest
@@ -205,7 +276,7 @@ function AutoFarm:GetQuestProgress()
     return nil
 end
 
--- Find best quest for player level (no boss skip)
+-- Find best quest for player level
 function AutoFarm:FindBestQuest()
     if not self.questData then
         warn("[AutoFarm] No quest data loaded")
@@ -248,7 +319,7 @@ function AutoFarm:FindBestQuest()
     return nil
 end
 
--- Find mob spawn location - search in multiple locations
+-- Find mob spawn location
 function AutoFarm:GetMobSpawnLocation(mobName)
     -- Method 1: Search in Enemies folder for existing mobs
     local enemies = Workspace:FindFirstChild("Enemies")
@@ -375,10 +446,16 @@ function AutoFarm:FindEnemy(mobName)
     return closest, closestDistance
 end
 
--- Group all nearby mobs to a central position and anchor them
+-- Group all nearby mobs to a central position
 function AutoFarm:GroupMobs(mobName, centerPosition)
+    local shouldBring = self:GetBringMobs()
+    if not shouldBring then return 0 end
+
     local enemies = self:FindAllEnemies(mobName)
-    local bringDistance = self.config and self.config:Get("AutoFarm", "BringDistance") or DEFAULT_BRING_DISTANCE
+    local bringDistance = self:GetBringDistance()
+    local shouldAnchor = self:GetAnchorMobs()
+    local shouldExpandHitbox = self:GetExpandHitbox()
+    local hitboxSize = self:GetHitboxSize()
     local groupedCount = 0
 
     for _, data in ipairs(enemies) do
@@ -395,16 +472,18 @@ function AutoFarm:GroupMobs(mobName, centerPosition)
                 data.RootPart.Velocity = Vector3.new(0, 0, 0)
                 data.RootPart.CanCollide = false
 
-                -- ANCHOR the mob so it stops moving completely
-                data.RootPart.Anchored = true
+                -- Anchor mob if enabled
+                if shouldAnchor then
+                    data.RootPart.Anchored = true
+                end
 
-                -- Also expand hitbox for easier hitting (invisible expansion)
-                -- Create or update hitbox expansion
-                local hitboxSize = 50
-                data.RootPart.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
-                data.RootPart.Transparency = 1 -- Make the expanded part invisible
+                -- Expand hitbox if enabled
+                if shouldExpandHitbox then
+                    data.RootPart.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                    data.RootPart.Transparency = 1 -- Keep expanded part invisible
+                end
 
-                -- Disable all other parts collision
+                -- Disable collision on all other parts
                 for _, part in pairs(data.Entity:GetDescendants()) do
                     if part:IsA("BasePart") and part ~= data.RootPart then
                         part.CanCollide = false
@@ -507,13 +586,9 @@ function AutoFarm:UseSkills()
 
     local commF = remotes:FindFirstChild("CommF_")
     if commF then
-        -- Try using skills Z, X, C, V
         for _, key in ipairs({"Z", "X", "C", "V"}) do
             pcall(function()
-                commF:InvokeServer("SkillZ")
-                commF:InvokeServer("SkillX")
-                commF:InvokeServer("SkillC")
-                commF:InvokeServer("SkillV")
+                commF:InvokeServer("Skill" .. key)
             end)
         end
     end
@@ -596,13 +671,11 @@ function AutoFarm:HandleNavigatingState()
 
                         self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
                     else
-                        -- On failure, still try to continue
                         task.wait(1)
                         self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
                     end
                 end)
             else
-                -- No NPC data, just go back to questing
                 self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
             end
         else
@@ -618,7 +691,6 @@ function AutoFarm:HandleNavigatingState()
                 })
             end)
         else
-            -- Even if no spawn found, go to combat and try to find mobs
             self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
                 mobName = data.mobName
             })
@@ -640,7 +712,6 @@ function AutoFarm:HandleCombatState()
     -- Get farm position
     local farmPosition = self:GetMobFarmPosition(mobName)
     if not farmPosition then
-        -- No mobs found, try to navigate to spawn
         local spawnCFrame = self:GetMobSpawnLocation(mobName)
         if spawnCFrame then
             self.stateManager:SetState(self.stateManager:GetStates().NAVIGATING, {
@@ -648,7 +719,6 @@ function AutoFarm:HandleCombatState()
                 mobName = mobName
             })
         else
-            -- Wait a bit and check again
             task.wait(1)
         end
         return
@@ -671,7 +741,7 @@ function AutoFarm:HandleCombatState()
         self.combat:EquipSelectedWeapon()
     end
 
-    -- Attack using game remotes (doesn't block input)
+    -- Attack using game remotes
     self:AttackEnemies()
 
     -- Use skills
@@ -767,7 +837,10 @@ function AutoFarm:GetStatus()
         mob = self.currentMobName,
         progress = self.mobKillCount .. "/" .. self.requiredKills,
         level = GetPlayerLevel(),
-        weaponType = self.selectedWeaponType
+        weaponType = self.selectedWeaponType,
+        flyHeight = self:GetFlyHeight(),
+        hitboxEnabled = self:GetExpandHitbox(),
+        hitboxSize = self:GetHitboxSize()
     }
 end
 

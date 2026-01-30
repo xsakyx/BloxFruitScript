@@ -1,7 +1,13 @@
 --[[
     FruitSniper.lua
-    Fruit detection, collection, and auto-store system
-    Correct paths: workspace["FruitName Fruit"] with OriginalName attribute
+    Professional Fruit Detection, Collection, and Auto-Store System
+
+    Features:
+    - Detects fruits at workspace["FruitName Fruit"] with OriginalName attribute
+    - Smart auto-store: tries to store, if already owned closes UI and continues
+    - Configurable timeout for store attempts
+    - Fruit filtering by tier
+    - Server hop when no fruits found
 ]]
 
 local FruitSniper = {}
@@ -18,6 +24,7 @@ local LocalPlayer = Players.LocalPlayer
 
 -- Constants
 local FRUIT_SCAN_INTERVAL = 2
+local DEFAULT_STORE_TIMEOUT = 5
 local SERVER_HOP_DELAY = 30
 
 -- Fruit tiers
@@ -36,17 +43,22 @@ function FruitSniper.new(config, teleport)
     self.teleport = teleport
     self.enabled = false
     self.autoStoreEnabled = false
+    self.storeTimeout = DEFAULT_STORE_TIMEOUT
     self.scanLoop = nil
     self.foundFruits = {}
     self.collectedFruits = {}
+    self.ignoredFruits = {} -- Fruits we've tried to store but couldn't (already owned)
     self.lastScanTime = 0
     self.lastServerHop = 0
     self.noFruitCount = 0
+    self.isStoringFruit = false
+    self.previousActivity = nil -- What we were doing before fruit pickup
 
     self.callbacks = {
         onFruitFound = nil,
         onFruitCollected = nil,
         onFruitStored = nil,
+        onFruitIgnored = nil,
         onServerHop = nil
     }
 
@@ -99,6 +111,11 @@ end
 
 -- Check if fruit should be collected
 function FruitSniper:ShouldCollectFruit(fruitName)
+    -- Check if we've already tried to store this fruit and it failed
+    if self.ignoredFruits[fruitName] then
+        return false
+    end
+
     if not self.config then return true end
 
     local tier = self:GetFruitTier(fruitName)
@@ -125,7 +142,6 @@ function FruitSniper:ShouldCollectFruit(fruitName)
 end
 
 -- Scan workspace for fruits
--- Fruits are Tools in workspace named "FruitName Fruit" with OriginalName attribute
 function FruitSniper:ScanForFruits()
     local fruits = {}
 
@@ -138,7 +154,7 @@ function FruitSniper:ScanForFruits()
             -- Fruits are Tools named "FruitName Fruit"
             if obj:IsA("Tool") and obj.Name:find("Fruit") then
                 isFruit = true
-                -- Get original name from attribute (format: "FruitName-FruitName")
+                -- Get original name from attribute (format: "Rubber-Rubber")
                 local originalName = obj:GetAttribute("OriginalName")
                 if originalName then
                     -- Convert "Rubber-Rubber" to "Rubber"
@@ -151,7 +167,7 @@ function FruitSniper:ScanForFruits()
                 fruitName = obj.Name:gsub(" Fruit", "")
             end
 
-            if isFruit and fruitName ~= "" and not self.collectedFruits[obj] then
+            if isFruit and fruitName ~= "" and not self.collectedFruits[obj] and not self.ignoredFruits[fruitName] then
                 local handle = obj:FindFirstChild("Handle")
                 local position = handle and handle.Position or nil
 
@@ -185,15 +201,16 @@ function FruitSniper:ScanForFruits()
     return fruits
 end
 
--- Check if player has collected the fruit
-function FruitSniper:HasCollectedFruit(fruitName)
+-- Check if fruit is in player inventory (backpack or equipped)
+function FruitSniper:HasFruitInInventory(fruitName)
     local character = GetCharacter()
-    if not character then return false end
 
-    -- Check if fruit tool is in character (equipped)
-    for _, item in pairs(character:GetChildren()) do
-        if item:IsA("Tool") and item.Name:find(fruitName) then
-            return true
+    -- Check equipped tools
+    if character then
+        for _, item in pairs(character:GetChildren()) do
+            if item:IsA("Tool") and item.Name:find(fruitName) then
+                return true, item
+            end
         end
     end
 
@@ -202,12 +219,155 @@ function FruitSniper:HasCollectedFruit(fruitName)
     if backpack then
         for _, item in pairs(backpack:GetChildren()) do
             if item:IsA("Tool") and item.Name:find(fruitName) then
-                return true
+                return true, item
             end
         end
     end
 
-    return false
+    return false, nil
+end
+
+-- Close any open fruit UI
+function FruitSniper:CloseOpenFruitUI()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return end
+
+    -- Look for fruit-related UIs and close them
+    for _, gui in pairs(playerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") then
+            local guiName = gui.Name:lower()
+            if guiName:find("fruit") or guiName:find("store") or guiName:find("eat") then
+                pcall(function()
+                    -- Try to find and click close button
+                    for _, desc in pairs(gui:GetDescendants()) do
+                        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) then
+                            local name = desc.Name:lower()
+                            local text = desc:IsA("TextButton") and desc.Text:lower() or ""
+                            if name:find("close") or name:find("cancel") or name:find("exit") or
+                               text:find("close") or text:find("cancel") or text:find("x") then
+                                if firesignal then
+                                    firesignal(desc.Activated)
+                                    firesignal(desc.MouseButton1Click)
+                                end
+                                return
+                            end
+                        end
+                    end
+                    -- If no close button found, just disable the gui
+                    gui.Enabled = false
+                end)
+            end
+        end
+    end
+end
+
+-- Try to store fruit with timeout
+function FruitSniper:TryStoreFruit(fruitName, fruitTool)
+    if not self.autoStoreEnabled then return false end
+    if self.isStoringFruit then return false end
+
+    self.isStoringFruit = true
+    local startTime = tick()
+    local timeout = self.storeTimeout
+    local stored = false
+
+    -- Equip the fruit
+    local character, humanoid = GetCharacter()
+    if not humanoid then
+        self.isStoringFruit = false
+        return false
+    end
+
+    pcall(function()
+        humanoid:EquipTool(fruitTool)
+    end)
+    task.wait(0.3)
+
+    -- Activate to open store/eat UI
+    pcall(function()
+        fruitTool:Activate()
+    end)
+    task.wait(0.5)
+
+    -- Find and click store button
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if playerGui then
+        local storeClicked = false
+
+        -- Search for store button
+        for _, gui in pairs(playerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled then
+                for _, desc in pairs(gui:GetDescendants()) do
+                    if (desc:IsA("TextButton") or desc:IsA("ImageButton")) then
+                        local name = desc.Name:lower()
+                        local text = desc:IsA("TextButton") and desc.Text:lower() or ""
+                        if name:find("store") or text:find("store") then
+                            pcall(function()
+                                if firesignal then
+                                    firesignal(desc.Activated)
+                                    firesignal(desc.MouseButton1Click)
+                                end
+                            end)
+                            storeClicked = true
+                            break
+                        end
+                    end
+                end
+            end
+            if storeClicked then break end
+        end
+
+        -- Wait and check if fruit was stored
+        if storeClicked then
+            -- Wait for store to process, but with timeout
+            while tick() - startTime < timeout do
+                task.wait(0.5)
+
+                -- Check if fruit is still in inventory
+                local stillHasFruit, _ = self:HasFruitInInventory(fruitName)
+                if not stillHasFruit then
+                    -- Fruit was stored successfully
+                    stored = true
+                    break
+                end
+            end
+        end
+    end
+
+    -- Check result after timeout
+    if not stored then
+        -- Fruit wasn't stored - probably already have it in storage
+        local stillHasFruit, _ = self:HasFruitInInventory(fruitName)
+        if stillHasFruit then
+            -- Close the UI
+            self:CloseOpenFruitUI()
+            task.wait(0.3)
+
+            -- Add to ignored list so we don't try again
+            self.ignoredFruits[fruitName] = true
+
+            -- Callback for ignored fruit
+            if self.callbacks.onFruitIgnored then
+                pcall(self.callbacks.onFruitIgnored, fruitName, "Already in storage")
+            end
+
+            -- Unequip the fruit
+            pcall(function()
+                humanoid:UnequipTools()
+            end)
+
+            print("[FruitSniper] Could not store " .. fruitName .. " - likely already in storage. Continuing...")
+        end
+    else
+        -- Successfully stored
+        if self.callbacks.onFruitStored then
+            pcall(self.callbacks.onFruitStored, fruitName)
+        end
+        print("[FruitSniper] Successfully stored " .. fruitName)
+    end
+
+    self.isStoringFruit = false
+    return stored
 end
 
 -- Collect a fruit
@@ -239,7 +399,8 @@ function FruitSniper:CollectFruit(fruitData)
                 task.wait(1)
 
                 -- Check if collected
-                if self:HasCollectedFruit(fruitData.Name) then
+                local hasFruit, fruitTool = self:HasFruitInInventory(fruitData.Name)
+                if hasFruit and fruitTool then
                     if self.callbacks.onFruitCollected then
                         pcall(self.callbacks.onFruitCollected, fruitData.Name, fruitData.Tier)
                     end
@@ -247,7 +408,7 @@ function FruitSniper:CollectFruit(fruitData)
                     -- Auto-store if enabled
                     if self.autoStoreEnabled then
                         task.wait(0.5)
-                        self:StoreFruit(fruitData.Name)
+                        self:TryStoreFruit(fruitData.Name, fruitTool)
                     end
                 else
                     self.collectedFruits[fruitData.Object] = nil
@@ -266,92 +427,14 @@ function FruitSniper:CollectFruit(fruitData)
     return true
 end
 
--- Store fruit in inventory
--- Equip fruit, click to open UI, click "Store" button
-function FruitSniper:StoreFruit(fruitName)
-    local character, humanoid = GetCharacter()
-    if not humanoid then return false end
-
-    -- Find and equip the fruit tool
-    local fruitTool = nil
-
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    if backpack then
-        for _, item in pairs(backpack:GetChildren()) do
-            if item:IsA("Tool") and item.Name:find(fruitName) then
-                fruitTool = item
-                break
-            end
-        end
-    end
-
-    if not fruitTool and character then
-        for _, item in pairs(character:GetChildren()) do
-            if item:IsA("Tool") and item.Name:find(fruitName) then
-                fruitTool = item
-                break
-            end
-        end
-    end
-
-    if not fruitTool then return false end
-
-    -- Equip the fruit
-    pcall(function()
-        humanoid:EquipTool(fruitTool)
-    end)
-
-    task.wait(0.5)
-
-    -- Activate the tool (opens the eat/store UI)
-    pcall(function()
-        fruitTool:Activate()
-    end)
-
-    task.wait(0.5)
-
-    -- Find and click the Store button in PlayerGui
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if playerGui then
-        -- Search for store button in any open UI
-        local function findStoreButton(parent)
-            for _, child in pairs(parent:GetDescendants()) do
-                if child:IsA("TextButton") or child:IsA("ImageButton") then
-                    local text = child:IsA("TextButton") and child.Text or ""
-                    if text:lower():find("store") or child.Name:lower():find("store") then
-                        return child
-                    end
-                end
-            end
-            return nil
-        end
-
-        local storeButton = findStoreButton(playerGui)
-        if storeButton then
-            pcall(function()
-                -- Fire the button
-                if firesignal then
-                    firesignal(storeButton.Activated)
-                    firesignal(storeButton.MouseButton1Click)
-                end
-            end)
-
-            task.wait(0.5)
-
-            if self.callbacks.onFruitStored then
-                pcall(self.callbacks.onFruitStored, fruitName)
-            end
-
-            return true
-        end
-    end
-
-    return false
-end
-
--- Enable auto-store
+-- Set auto-store enabled
 function FruitSniper:SetAutoStore(enabled)
     self.autoStoreEnabled = enabled
+end
+
+-- Set store timeout
+function FruitSniper:SetStoreTimeout(timeout)
+    self.storeTimeout = timeout
 end
 
 -- Server hop
@@ -402,10 +485,12 @@ function FruitSniper:Start()
 
     self.foundFruits = {}
     self.collectedFruits = {}
+    -- Don't reset ignored fruits - keep memory of what we couldn't store
     self.noFruitCount = 0
 
     self.scanLoop = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
+        if self.isStoringFruit then return end -- Don't scan while storing
 
         local now = tick()
         if now - self.lastScanTime < FRUIT_SCAN_INTERVAL then return end
@@ -474,6 +559,16 @@ function FruitSniper:GetFoundFruits()
     return self:ScanForFruits()
 end
 
+-- Get ignored fruits
+function FruitSniper:GetIgnoredFruits()
+    return self.ignoredFruits
+end
+
+-- Clear ignored fruits (allow retrying)
+function FruitSniper:ClearIgnoredFruits()
+    self.ignoredFruits = {}
+end
+
 -- Callbacks
 function FruitSniper:OnFruitFound(callback)
     self.callbacks.onFruitFound = callback
@@ -485,6 +580,10 @@ end
 
 function FruitSniper:OnFruitStored(callback)
     self.callbacks.onFruitStored = callback
+end
+
+function FruitSniper:OnFruitIgnored(callback)
+    self.callbacks.onFruitIgnored = callback
 end
 
 function FruitSniper:OnServerHop(callback)
@@ -502,6 +601,7 @@ function FruitSniper:Destroy()
     self.callbacks = {}
     self.foundFruits = {}
     self.collectedFruits = {}
+    self.ignoredFruits = {}
 end
 
 return {
