@@ -159,429 +159,39 @@ local function LoadGameData()
     }
 end
 
--- Create UI using RenLib
+-- Create UI using new MainUI module
 local function CreateUI(modules, instances)
     print("[BloxFruits] Creating UI...")
 
-    -- Load RenLib
-    local Library
-    local success, err = pcall(function()
-        Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xsakyx/RobloxUILib/refs/heads/main/RenLibB%C3%AAta.lua"))()
-    end)
-
-    if not success or not Library then
-        warn("[BloxFruits] Failed to load UI library:", err)
+    -- Load MainUI module
+    local MainUIModule = LoadModule("UI/MainUI.lua")
+    if not MainUIModule then
+        warn("[BloxFruits] Failed to load MainUI module")
         return nil
     end
 
-    -- Create main window
-    local Window = Library:CreateWindow({
-        Name = "Blox Fruits Auto Farm"
+    -- Create UI instance
+    local mainUI = MainUIModule.new()
+
+    -- Set module references
+    mainUI:SetModules({
+        config = instances.config,
+        autoFarm = instances.autoFarm,
+        fruitSniper = instances.fruitSniper,
+        combat = instances.combat,
+        esp = instances.esp,
+        misc = instances.misc,
+        teleport = instances.teleport
     })
 
-    -- Main Tab
-    local MainTab = Window:CreateTab({
-        Name = "Main",
-        Emoji = "🏠"
-    })
-
-    local MainSection = MainTab:CreateSection({
-        Name = "Auto Farm",
-        Side = "Left"
-    })
-
-    -- Auto Farm Toggle
-    MainSection:CreateToggle({
-        Name = "Auto Farm Quests",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("General", "AutoFarm", value)
-            end
-            if instances.autoFarm then
-                if value then
-                    instances.autoFarm:Start()
-                else
-                    instances.autoFarm:Stop()
-                end
-            end
-        end
-    })
-
-    -- Fruit Sniper Toggle
-    MainSection:CreateToggle({
-        Name = "Fruit Sniper",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("General", "FruitSniper", value)
-            end
-            if instances.fruitSniper then
-                if value then
-                    instances.fruitSniper:Start()
-                else
-                    instances.fruitSniper:Stop()
-                end
-            end
-        end
-    })
-
-    -- ESP Toggle
-    MainSection:CreateToggle({
-        Name = "ESP",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("ESP", "Enabled", value)
-            end
-            if instances.esp then
-                if value then
-                    instances.esp:Start()
-                else
-                    instances.esp:Stop()
-                end
-            end
-        end
-    })
-
-    -- Farm Settings Section
-    local FarmSection = MainTab:CreateSection({
-        Name = "Farm Settings",
-        Side = "Right"
-    })
-
-    FarmSection:CreateToggle({
-        Name = "Bring Mobs",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("General", "BringMobs", value)
-            end
-        end
-    })
-
-    FarmSection:CreateSlider({
-        Name = "Bring Distance",
-        Min = 20,
-        Max = 200,
-        Default = 80,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("General", "BringDistance", value)
-            end
-        end
-    })
-
-    FarmSection:CreateToggle({
-        Name = "Skip Bosses",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Quest", "SkipBosses", value)
-            end
-        end
-    })
-
-    -- Combat Tab
-    local CombatTab = Window:CreateTab({
-        Name = "Combat",
-        Emoji = "⚔️"
-    })
-
-    local CombatSection = CombatTab:CreateSection({
-        Name = "Combat Settings",
-        Side = "Left"
-    })
-
-    CombatSection:CreateToggle({
-        Name = "Auto Attack",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Combat", "AutoAttack", value)
-            end
-        end
-    })
-
-    CombatSection:CreateToggle({
-        Name = "Auto Skills",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Combat", "AutoSkills", value)
-            end
-        end
-    })
-
-    CombatSection:CreateToggle({
-        Name = "Auto Haki",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Combat", "AutoHaki", value)
-            end
-        end
-    })
-
-    -- Skills Section
-    local SkillsSection = CombatTab:CreateSection({
-        Name = "Skills",
-        Side = "Right"
-    })
-
-    for _, key in ipairs({"Z", "X", "C", "V", "F"}) do
-        SkillsSection:CreateToggle({
-            Name = "Use " .. key .. " Skill",
-            Default = (key == "Z" or key == "X"),
-            Callback = function(value)
-                if instances.config then
-                    local skills = instances.config:Get("Combat", "SkillsEnabled") or {}
-                    skills[key] = value
-                    instances.config:Set("Combat", "SkillsEnabled", skills)
-                end
-            end
-        })
-    end
-
-    -- Teleport Tab
-    local TeleportTab = Window:CreateTab({
-        Name = "Teleport",
-        Emoji = "🚀"
-    })
-
-    local TeleportSection = TeleportTab:CreateSection({
-        Name = "Teleport Settings",
-        Side = "Left"
-    })
-
-    TeleportSection:CreateSlider({
-        Name = "Tween Speed",
-        Min = 50,
-        Max = 500,
-        Default = 200,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Teleport", "TweenSpeed", value)
-            end
-        end
-    })
-
-    TeleportSection:CreateToggle({
-        Name = "Bypass Walls (NoClip)",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Teleport", "BypassWalls", value)
-            end
-        end
-    })
-
-    -- Sea Travel Section
-    local SeaSection = TeleportTab:CreateSection({
-        Name = "Sea Travel",
-        Side = "Right"
-    })
-
-    SeaSection:CreateButton({
-        Name = "Travel to Sea 1",
-        Callback = function()
-            if instances.misc then
-                instances.misc:TravelToSea(1)
-            end
-        end
-    })
-
-    SeaSection:CreateButton({
-        Name = "Travel to Sea 2",
-        Callback = function()
-            if instances.misc then
-                instances.misc:TravelToSea(2)
-            end
-        end
-    })
-
-    SeaSection:CreateButton({
-        Name = "Travel to Sea 3",
-        Callback = function()
-            if instances.misc then
-                instances.misc:TravelToSea(3)
-            end
-        end
-    })
-
-    -- ESP Tab
-    local ESPTab = Window:CreateTab({
-        Name = "ESP",
-        Emoji = "👁️"
-    })
-
-    local ESPSection = ESPTab:CreateSection({
-        Name = "ESP Settings",
-        Side = "Left"
-    })
-
-    ESPSection:CreateToggle({
-        Name = "Fruit ESP",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("ESP", "FruitESP", value)
-            end
-        end
-    })
-
-    ESPSection:CreateToggle({
-        Name = "Boss ESP",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("ESP", "BossESP", value)
-            end
-        end
-    })
-
-    ESPSection:CreateToggle({
-        Name = "Player ESP",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("ESP", "PlayerESP", value)
-            end
-        end
-    })
-
-    ESPSection:CreateToggle({
-        Name = "Mob ESP",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("ESP", "MobESP", value)
-            end
-        end
-    })
-
-    ESPSection:CreateToggle({
-        Name = "Chest ESP",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("ESP", "ChestESP", value)
-            end
-        end
-    })
-
-    -- Misc Tab
-    local MiscTab = Window:CreateTab({
-        Name = "Misc",
-        Emoji = "⚙️"
-    })
-
-    local MiscSection = MiscTab:CreateSection({
-        Name = "Utilities",
-        Side = "Left"
-    })
-
-    MiscSection:CreateToggle({
-        Name = "Anti-AFK",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Misc", "AntiAFK", value)
-            end
-            if instances.misc then
-                if value then
-                    instances.misc:StartAntiAFK()
-                else
-                    instances.misc:StopAntiAFK()
-                end
-            end
-        end
-    })
-
-    MiscSection:CreateToggle({
-        Name = "Auto Rejoin",
-        Default = true,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Misc", "AutoRejoin", value)
-            end
-            if instances.misc then
-                if value then
-                    instances.misc:StartAutoRejoin()
-                else
-                    instances.misc:StopAutoRejoin()
-                end
-            end
-        end
-    })
-
-    MiscSection:CreateToggle({
-        Name = "No Clip",
-        Default = false,
-        Callback = function(value)
-            if instances.config then
-                instances.config:Set("Misc", "NoClip", value)
-            end
-            if instances.misc then
-                if value then
-                    instances.misc:StartNoClip()
-                else
-                    instances.misc:StopNoClip()
-                end
-            end
-        end
-    })
-
-    -- Actions Section
-    local ActionsSection = MiscTab:CreateSection({
-        Name = "Actions",
-        Side = "Right"
-    })
-
-    ActionsSection:CreateButton({
-        Name = "Server Hop",
-        Callback = function()
-            if instances.misc then
-                instances.misc:ServerHop()
-            end
-        end
-    })
-
-    ActionsSection:CreateButton({
-        Name = "Rejoin Server",
-        Callback = function()
-            if instances.misc then
-                instances.misc:Rejoin()
-            end
-        end
-    })
-
-    ActionsSection:CreateButton({
-        Name = "Reset Character",
-        Callback = function()
-            if instances.misc then
-                instances.misc:ResetCharacter()
-            end
-        end
-    })
-
-    ActionsSection:CreateButton({
-        Name = "Save Config",
-        Callback = function()
-            if instances.config then
-                local success = instances.config:Save()
-                Library:Notify({
-                    Title = "Config",
-                    Content = success and "Config saved!" or "Failed to save config",
-                    Duration = 3
-                })
-            end
-        end
-    })
+    -- Initialize UI
+    mainUI:Init()
 
     return {
-        Window = Window,
-        Library = Library
+        MainUI = mainUI,
+        Toggle = function()
+            mainUI:Toggle()
+        end
     }
 end
 
@@ -642,44 +252,40 @@ local function Initialize()
     -- Setup callbacks
     if autoFarm then
         autoFarm:OnQuestComplete(function(questName)
-            if ui and ui.Library then
-                ui.Library:Notify({
-                    Title = "Quest Complete",
-                    Content = questName,
-                    Duration = 3
-                })
+            if misc then
+                misc:Notify("Quest Complete", questName)
             end
         end)
 
         autoFarm:OnLevelUp(function(newLevel)
-            if ui and ui.Library then
-                ui.Library:Notify({
-                    Title = "Level Up!",
-                    Content = "Level " .. tostring(newLevel),
-                    Duration = 3
-                })
+            if misc then
+                misc:Notify("Level Up!", "Level " .. tostring(newLevel))
             end
         end)
     end
 
     if fruitSniper then
         fruitSniper:OnFruitFound(function(fruitName, tier, distance)
-            if ui and ui.Library then
-                ui.Library:Notify({
-                    Title = "Fruit Found!",
-                    Content = fruitName .. " (" .. tier .. ") - " .. math.floor(distance) .. "m",
-                    Duration = 5
-                })
+            if misc then
+                misc:Notify("Fruit Found!", fruitName .. " (" .. tier .. ") - " .. math.floor(distance) .. "m")
             end
         end)
 
         fruitSniper:OnFruitCollected(function(fruitName, tier)
-            if ui and ui.Library then
-                ui.Library:Notify({
-                    Title = "Fruit Collected!",
-                    Content = fruitName .. " (" .. tier .. ")",
-                    Duration = 5
-                })
+            if misc then
+                misc:Notify("Fruit Collected!", fruitName .. " (" .. tier .. ")")
+            end
+        end)
+
+        fruitSniper:OnFruitStored(function(fruitName)
+            if misc then
+                misc:Notify("Fruit Stored!", fruitName .. " saved to storage")
+            end
+        end)
+
+        fruitSniper:OnFruitIgnored(function(fruitName, reason)
+            if misc then
+                misc:Notify("Fruit Skipped", fruitName .. " - " .. reason)
             end
         end)
     end
@@ -707,7 +313,7 @@ local function Initialize()
                 if esp then esp:Stop() end
             end,
             ToggleUI = function()
-                if ui and ui.Window then ui.Window:Toggle() end
+                if ui and ui.Toggle then ui.Toggle() end
             end,
             ServerHop = function()
                 if misc then misc:ServerHop() end
@@ -719,14 +325,14 @@ local function Initialize()
     end
 
     print("[BloxFruits] Script loaded successfully!")
-    print("[BloxFruits] Press K to toggle UI")
+    print("[BloxFruits] Quick Keybinds:")
+    print("  U = Toggle Auto Farm")
+    print("  I = Toggle Fruit Sniper")
+    print("  O = Toggle ESP")
+    print("  K = Toggle UI")
 
-    if ui and ui.Library then
-        ui.Library:Notify({
-            Title = SCRIPT_CONFIG.Name,
-            Content = "Script loaded! Press K to toggle UI",
-            Duration = 5
-        })
+    if misc then
+        misc:Notify(SCRIPT_CONFIG.Name, "Script loaded! Press U to toggle farm, K for UI")
     end
 end
 
