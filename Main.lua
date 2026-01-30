@@ -13,13 +13,27 @@
     Uses tween-based teleportation (no direct TP)
 ]]
 
--- Prevent multiple instances
-if getgenv and getgenv().BloxFruitScriptLoaded then
-    warn("[BloxFruits] Script already loaded!")
-    return
-end
-if getgenv then
-    getgenv().BloxFruitScriptLoaded = true
+-- Script configuration
+local SCRIPT_CONFIG = {
+    Name = "Blox Fruits Auto Farm",
+    Version = "1.1.0",
+    Author = "BloxFruit Script Team",
+    DataFolder = "BloxFruitScript"
+}
+
+-- Cleanup previous instance if exists
+if getgenv and getgenv().BloxFruits then
+    print("[BloxFruits] Cleaning up previous instance...")
+    pcall(function()
+        if getgenv().BloxFruits.AutoFarm then getgenv().BloxFruits.AutoFarm:Stop() end
+        if getgenv().BloxFruits.FruitSniper then getgenv().BloxFruits.FruitSniper:Stop() end
+        if getgenv().BloxFruits.ESP then getgenv().BloxFruits.ESP:Stop() end
+        if getgenv().BloxFruits.Misc then getgenv().BloxFruits.Misc:Stop() end
+        if getgenv().BloxFruits.UI and getgenv().BloxFruits.UI.MainUI then
+            getgenv().BloxFruits.UI.MainUI:Destroy()
+        end
+    end)
+    getgenv().BloxFruits = nil
 end
 
 -- Services
@@ -54,14 +68,6 @@ if not IsBloxFruits() then
     warn("[BloxFruits] This script only works in Blox Fruits!")
     return
 end
-
--- Script configuration
-local SCRIPT_CONFIG = {
-    Name = "Blox Fruits Auto Farm",
-    Version = "1.0.0",
-    Author = "BloxFruit Script Team",
-    DataFolder = "BloxFruitScript"
-}
 
 -- GitHub raw content base URL - UPDATE THIS TO YOUR REPO
 local GITHUB_BASE = "https://raw.githubusercontent.com/xsakyx/BloxFruitScript/claude/blox-fruits-script-setup-qctSa/"
