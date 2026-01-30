@@ -446,11 +446,14 @@ function AutoFarm:FindEnemy(mobName)
     return closest, closestDistance
 end
 
--- Group all nearby mobs to a central position
+-- Group all nearby mobs to a central position (PROVEN METHOD)
+-- Based on working Blox Fruits scripts:
+-- 1. Teleport mobs using CFrame
+-- 2. Expand HumanoidRootPart Size for easier hits
+-- 3. Anchor to prevent movement
+-- 4. Zero velocity to stop momentum
 function AutoFarm:GroupMobs(mobName, centerPosition)
     local shouldBring = self:GetBringMobs()
-    if not shouldBring then return 0 end
-
     local enemies = self:FindAllEnemies(mobName)
     local bringDistance = self:GetBringDistance()
     local shouldAnchor = self:GetAnchorMobs()
@@ -460,8 +463,27 @@ function AutoFarm:GroupMobs(mobName, centerPosition)
 
     for _, data in ipairs(enemies) do
         local distance = (data.RootPart.Position - centerPosition).Magnitude
-        if distance <= bringDistance then
-            pcall(function()
+
+        pcall(function()
+            -- HITBOX EXPANSION (always do this for easier hits)
+            -- This is the key technique from working scripts
+            if shouldExpandHitbox then
+                -- Expand HumanoidRootPart to make it easier to hit
+                data.RootPart.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                data.RootPart.Transparency = 1 -- Hide the expanded hitbox
+                data.RootPart.CanCollide = false
+
+                -- Also expand Torso if exists (some mobs use Torso for hit detection)
+                local torso = data.Entity:FindFirstChild("Torso")
+                if torso then
+                    torso.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                    torso.Transparency = 1
+                    torso.CanCollide = false
+                end
+            end
+
+            -- BRING MOBS TO CENTER (teleport using CFrame)
+            if shouldBring and distance <= bringDistance then
                 -- Teleport enemy to center with small random offset
                 local offset = Vector3.new(
                     math.random(-MOB_GROUP_RADIUS, MOB_GROUP_RADIUS),
@@ -469,29 +491,27 @@ function AutoFarm:GroupMobs(mobName, centerPosition)
                     math.random(-MOB_GROUP_RADIUS, MOB_GROUP_RADIUS)
                 )
                 data.RootPart.CFrame = CFrame.new(centerPosition + offset)
+
+                -- Zero velocity to stop movement
                 data.RootPart.Velocity = Vector3.new(0, 0, 0)
-                data.RootPart.CanCollide = false
+                data.RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                data.RootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
-                -- Anchor mob if enabled
-                if shouldAnchor then
-                    data.RootPart.Anchored = true
-                end
+                groupedCount = groupedCount + 1
+            end
 
-                -- Expand hitbox if enabled
-                if shouldExpandHitbox then
-                    data.RootPart.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
-                    data.RootPart.Transparency = 1 -- Keep expanded part invisible
-                end
+            -- ANCHOR MOBS (stop them from moving)
+            if shouldAnchor then
+                data.RootPart.Anchored = true
+            end
 
-                -- Disable collision on all other parts
-                for _, part in pairs(data.Entity:GetDescendants()) do
-                    if part:IsA("BasePart") and part ~= data.RootPart then
-                        part.CanCollide = false
-                    end
+            -- Disable collision on all parts to prevent physics issues
+            for _, part in pairs(data.Entity:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
                 end
-            end)
-            groupedCount = groupedCount + 1
-        end
+            end
+        end)
     end
 
     return groupedCount
@@ -529,35 +549,40 @@ function AutoFarm:GetMobFarmPosition(mobName)
     return nil
 end
 
--- Attack all nearby enemies using game remotes
-function AutoFarm:AttackEnemies()
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    if not remotes then return end
-
-    -- Use CommF_ remote for combat
-    local commF = remotes:FindFirstChild("CommF_")
-    if commF then
-        pcall(function()
-            commF:InvokeServer("Combat")
-        end)
+-- Attack all nearby enemies using Combat module
+function AutoFarm:AttackEnemies(mobName)
+    -- Use the Combat module if available (primary method)
+    if self.combat then
+        -- Attack all enemies in range using proven methods
+        self.combat:AttackAllInRange(100)
+        self.combat:Attack()
+        return
     end
 
-    -- Also try direct combat remote
-    local combatRemote = remotes:FindFirstChild("Combat") or remotes:FindFirstChild("CombatRemote")
-    if combatRemote then
-        pcall(function()
-            combatRemote:FireServer()
-        end)
-    end
-
-    -- Equip and activate weapon
+    -- Fallback: Direct attack methods if Combat module not available
     local character = GetCharacter()
-    if character then
-        local tool = character:FindFirstChildOfClass("Tool")
-        if tool then
-            pcall(function()
-                tool:Activate()
-            end)
+    if not character then return end
+
+    local tool = character:FindFirstChildOfClass("Tool")
+    if tool then
+        -- Activate tool
+        pcall(function()
+            tool:Activate()
+        end)
+
+        -- Try firetouchinterest if available
+        if firetouchinterest then
+            local handle = tool:FindFirstChild("Handle")
+            if handle then
+                local enemies = self:FindAllEnemies(mobName)
+                for _, data in ipairs(enemies) do
+                    pcall(function()
+                        firetouchinterest(handle, data.RootPart, 0)
+                        task.wait()
+                        firetouchinterest(handle, data.RootPart, 1)
+                    end)
+                end
+            end
         end
     end
 end
@@ -730,19 +755,24 @@ function AutoFarm:HandleCombatState()
     -- Fly above the farm position
     self:FlyAbove(farmPosition)
 
-    -- Group all nearby mobs to center
+    -- Group all nearby mobs to center (with hitbox expansion)
     self:GroupMobs(mobName, farmPosition)
 
     -- Enable haki
     self:EnableHaki()
 
-    -- Equip weapon
+    -- Equip weapon using Combat module
     if self.combat then
         self.combat:EquipSelectedWeapon()
+        -- Set target for combat
+        local nearestEnemy = self:FindEnemy(mobName)
+        if nearestEnemy then
+            self.combat:SetTarget(nearestEnemy)
+        end
     end
 
-    -- Attack using game remotes
-    self:AttackEnemies()
+    -- Attack enemies using proven methods
+    self:AttackEnemies(mobName)
 
     -- Use skills
     if self.config and self.config:Get("Combat", "AutoSkills") then
