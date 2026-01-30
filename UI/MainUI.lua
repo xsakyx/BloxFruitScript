@@ -3,7 +3,7 @@
     Professional Grade User Interface
     Version: 1.1.0
 
-    Compatible with RenLib API
+    Compatible with RenLib API (Section-based elements)
 ]]
 
 local MainUI = {}
@@ -47,6 +47,7 @@ function MainUI.new()
     self.library = nil
     self.window = nil
     self.tabs = {}
+    self.sections = {}
     self.elements = {}
     self.callbacks = {}
 
@@ -63,6 +64,9 @@ function MainUI.new()
     self.autoFarmEnabled = false
     self.fruitSniperEnabled = false
     self.espEnabled = false
+
+    -- Selected island for teleport
+    self.selectedIsland = nil
 
     return self
 end
@@ -178,9 +182,7 @@ function MainUI:ToggleAutoFarm()
             self.autoFarm:Stop()
         end
     end
-    if self.misc then
-        self.misc:Notify("Auto Farm", self.autoFarmEnabled and "Enabled" or "Disabled")
-    end
+    self:Notify("Auto Farm", self.autoFarmEnabled and "Enabled" or "Disabled")
 end
 
 function MainUI:ToggleFruitSniper()
@@ -195,9 +197,7 @@ function MainUI:ToggleFruitSniper()
             self.fruitSniper:Stop()
         end
     end
-    if self.misc then
-        self.misc:Notify("Fruit Sniper", self.fruitSniperEnabled and "Enabled" or "Disabled")
-    end
+    self:Notify("Fruit Sniper", self.fruitSniperEnabled and "Enabled" or "Disabled")
 end
 
 function MainUI:ToggleESP()
@@ -212,8 +212,22 @@ function MainUI:ToggleESP()
             self.esp:Stop()
         end
     end
-    if self.misc then
-        self.misc:Notify("ESP", self.espEnabled and "Enabled" or "Disabled")
+    self:Notify("ESP", self.espEnabled and "Enabled" or "Disabled")
+end
+
+-- Notification helper
+function MainUI:Notify(title, content, duration)
+    if self.library and self.library.Notify then
+        pcall(function()
+            self.library:Notify({
+                Title = title or "Blox Fruits Pro",
+                Content = content or "",
+                Duration = duration or 3,
+                Emoji = "✓"
+            })
+        end)
+    elseif self.misc then
+        self.misc:Notify(title, content)
     end
 end
 
@@ -229,64 +243,32 @@ function MainUI:GetCurrentIslands()
     return ISLAND_DATA[sea] or ISLAND_DATA.Sea1
 end
 
--- Helper to add element (tries different API patterns)
-local function AddElement(parent, elementType, options)
-    local methods = {
-        "Add" .. elementType,
-        "Create" .. elementType,
-        elementType
-    }
-
-    for _, method in ipairs(methods) do
-        if parent[method] then
-            local success, result = pcall(function()
-                return parent[method](parent, options)
-            end)
-            if success then
-                return result
-            end
-        end
-    end
-
-    warn("[MainUI] Could not create element:", elementType)
-    return nil
-end
-
 -- Create window
 function MainUI:CreateWindow()
     if not self.library then return false end
 
-    -- Try different window creation methods
-    local windowOptions = {
-        Name = "Blox Fruits Pro v" .. VERSION,
-        LoadingTitle = "Blox Fruits Pro",
-        LoadingSubtitle = "Professional Auto Farm Suite",
-        ConfigurationSaving = {
-            Enabled = true,
-            FolderName = "BloxFruitScript",
-            FileName = "Config"
-        }
-    }
+    -- Create window using RenLib API
+    local success, window = pcall(function()
+        return self.library:CreateWindow({
+            Name = "Blox Fruits Pro v" .. VERSION
+        })
+    end)
 
-    -- Try CreateWindow or MakeWindow
-    if self.library.CreateWindow then
-        self.window = self.library:CreateWindow(windowOptions)
-    elseif self.library.MakeWindow then
-        self.window = self.library:MakeWindow(windowOptions)
-    elseif self.library.new then
-        self.window = self.library.new(windowOptions)
-    else
-        warn("[MainUI] Unknown library API")
+    if not success or not window then
+        warn("[MainUI] Failed to create window:", window)
         return false
     end
 
-    if not self.window then
-        warn("[MainUI] Failed to create window")
-        return false
-    end
+    self.window = window
 
-    -- Create tabs
-    self:CreateTabs()
+    -- Create all tabs and their content
+    self:CreateMainTab()
+    self:CreateFarmTab()
+    self:CreateCombatTab()
+    self:CreateTeleportTab()
+    self:CreateFruitTab()
+    self:CreateESPTab()
+    self:CreateSettingsTab()
 
     -- Setup keybinds
     self:SetupKeybinds()
@@ -294,74 +276,23 @@ function MainUI:CreateWindow()
     return true
 end
 
--- Create all tabs
-function MainUI:CreateTabs()
-    -- Try to create tabs with different API patterns
-    local tabMethod = self.window.CreateTab or self.window.AddTab or self.window.MakeTab
-    if not tabMethod then
-        warn("[MainUI] No tab creation method found")
-        return
-    end
+-- Create Main Tab
+function MainUI:CreateMainTab()
+    local tab = self.window:CreateTab({
+        Name = "Main",
+        Emoji = "🏠"
+    })
+    self.tabs.main = tab
 
-    -- MAIN TAB
-    local mainTab = tabMethod(self.window, {Name = "Main", Icon = "home"})
-    if mainTab then
-        self.tabs.main = mainTab
-        self:PopulateMainTab(mainTab)
-    end
+    -- Quick Toggles Section
+    local quickSection = tab:CreateSection({
+        Name = "Quick Toggles",
+        Side = "Left"
+    })
 
-    -- AUTO FARM TAB
-    local farmTab = tabMethod(self.window, {Name = "Auto Farm", Icon = "target"})
-    if farmTab then
-        self.tabs.farm = farmTab
-        self:PopulateFarmTab(farmTab)
-    end
-
-    -- COMBAT TAB
-    local combatTab = tabMethod(self.window, {Name = "Combat", Icon = "swords"})
-    if combatTab then
-        self.tabs.combat = combatTab
-        self:PopulateCombatTab(combatTab)
-    end
-
-    -- TELEPORT TAB
-    local teleportTab = tabMethod(self.window, {Name = "Teleport", Icon = "navigation"})
-    if teleportTab then
-        self.tabs.teleport = teleportTab
-        self:PopulateTeleportTab(teleportTab)
-    end
-
-    -- FRUIT SNIPER TAB
-    local fruitTab = tabMethod(self.window, {Name = "Fruit Sniper", Icon = "apple"})
-    if fruitTab then
-        self.tabs.fruit = fruitTab
-        self:PopulateFruitTab(fruitTab)
-    end
-
-    -- ESP TAB
-    local espTab = tabMethod(self.window, {Name = "ESP", Icon = "eye"})
-    if espTab then
-        self.tabs.esp = espTab
-        self:PopulateESPTab(espTab)
-    end
-
-    -- SETTINGS TAB
-    local settingsTab = tabMethod(self.window, {Name = "Settings", Icon = "settings"})
-    if settingsTab then
-        self.tabs.settings = settingsTab
-        self:PopulateSettingsTab(settingsTab)
-    end
-end
-
--- Populate Main Tab
-function MainUI:PopulateMainTab(tab)
-    -- Section
-    AddElement(tab, "Section", {Name = "Quick Toggles"})
-
-    -- Auto Farm Toggle
-    self.elements.autoFarmToggle = AddElement(tab, "Toggle", {
+    self.elements.autoFarmToggle = quickSection:CreateToggle({
         Name = "Auto Farm [U]",
-        CurrentValue = false,
+        Default = false,
         Flag = "MainAutoFarm",
         Callback = function(value)
             self.autoFarmEnabled = value
@@ -372,10 +303,9 @@ function MainUI:PopulateMainTab(tab)
         end
     })
 
-    -- Fruit Sniper Toggle
-    self.elements.fruitSniperToggle = AddElement(tab, "Toggle", {
+    self.elements.fruitSniperToggle = quickSection:CreateToggle({
         Name = "Fruit Sniper [I]",
-        CurrentValue = false,
+        Default = false,
         Flag = "MainFruitSniper",
         Callback = function(value)
             self.fruitSniperEnabled = value
@@ -386,10 +316,9 @@ function MainUI:PopulateMainTab(tab)
         end
     })
 
-    -- ESP Toggle
-    self.elements.espToggle = AddElement(tab, "Toggle", {
+    self.elements.espToggle = quickSection:CreateToggle({
         Name = "ESP [O]",
-        CurrentValue = false,
+        Default = false,
         Flag = "MainESP",
         Callback = function(value)
             self.espEnabled = value
@@ -400,60 +329,72 @@ function MainUI:PopulateMainTab(tab)
         end
     })
 
-    -- Status
-    AddElement(tab, "Section", {Name = "Status"})
-
-    self.elements.statusParagraph = AddElement(tab, "Paragraph", {
-        Title = "Current Status",
-        Content = "Idle - Ready to farm"
+    -- Status Section
+    local statusSection = tab:CreateSection({
+        Name = "Status",
+        Side = "Right"
     })
+
+    self.elements.statusLabel = statusSection:CreateLabel("Status: Idle - Ready to farm")
+
+    statusSection:CreateLabel("Press K to toggle UI visibility")
 end
 
--- Populate Farm Tab
-function MainUI:PopulateFarmTab(tab)
-    AddElement(tab, "Section", {Name = "Weapon Selection"})
+-- Create Farm Tab
+function MainUI:CreateFarmTab()
+    local tab = self.window:CreateTab({
+        Name = "Auto Farm",
+        Emoji = "🎯"
+    })
+    self.tabs.farm = tab
 
-    AddElement(tab, "Dropdown", {
+    -- Weapon Section
+    local weaponSection = tab:CreateSection({
+        Name = "Weapon Selection",
+        Side = "Left"
+    })
+
+    weaponSection:CreateDropdown({
         Name = "Weapon Type",
-        Options = {"Melee", "Sword", "Demon Fruit"},
-        CurrentOption = {"Melee"},
+        Values = {"Melee", "Sword", "Demon Fruit"},
+        Default = "Melee",
         Flag = "WeaponType",
-        Callback = function(option)
-            local selected = type(option) == "table" and option[1] or option
-            if self.config then self.config:Set("Combat", "WeaponType", selected) end
-            if self.autoFarm then self.autoFarm:SetWeaponType(selected) end
-            if self.combat then self.combat:SetWeaponType(selected) end
+        Callback = function(value)
+            if self.config then self.config:Set("Combat", "WeaponType", value) end
+            if self.autoFarm then self.autoFarm:SetWeaponType(value) end
+            if self.combat then self.combat:SetWeaponType(value) end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Attack Method"})
-
-    AddElement(tab, "Dropdown", {
+    weaponSection:CreateDropdown({
         Name = "Combat Method",
-        Options = ATTACK_METHODS,
-        CurrentOption = {"All Methods Combined"},
+        Values = ATTACK_METHODS,
+        Default = "All Methods Combined",
         Flag = "AttackMethod",
-        Callback = function(option)
-            local selected = type(option) == "table" and option[1] or option
-            if self.config then self.config:Set("Combat", "AttackMethod", selected) end
-            if self.combat then self.combat:SetAttackMethod(selected) end
+        Callback = function(value)
+            if self.config then self.config:Set("Combat", "AttackMethod", value) end
+            if self.combat then self.combat:SetAttackMethod(value) end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Mob Settings"})
+    -- Mob Settings Section
+    local mobSection = tab:CreateSection({
+        Name = "Mob Settings",
+        Side = "Left"
+    })
 
-    AddElement(tab, "Toggle", {
+    mobSection:CreateToggle({
         Name = "Bring Mobs to Center",
-        CurrentValue = true,
+        Default = true,
         Flag = "BringMobs",
         Callback = function(value)
             if self.config then self.config:Set("AutoFarm", "BringMobs", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    mobSection:CreateToggle({
         Name = "Expand Enemy Hitbox",
-        CurrentValue = true,
+        Default = true,
         Flag = "ExpandHitbox",
         Callback = function(value)
             if self.config then self.config:Set("AutoFarm", "ExpandHitbox", value) end
@@ -461,11 +402,11 @@ function MainUI:PopulateFarmTab(tab)
         end
     })
 
-    AddElement(tab, "Slider", {
+    mobSection:CreateSlider({
         Name = "Hitbox Size",
-        Range = {10, 100},
-        Increment = 5,
-        CurrentValue = 50,
+        Min = 10,
+        Max = 100,
+        Default = 50,
         Flag = "HitboxSize",
         Callback = function(value)
             if self.config then self.config:Set("AutoFarm", "HitboxSize", value) end
@@ -473,22 +414,26 @@ function MainUI:PopulateFarmTab(tab)
         end
     })
 
-    AddElement(tab, "Toggle", {
+    mobSection:CreateToggle({
         Name = "Anchor Mobs (Stop Movement)",
-        CurrentValue = true,
+        Default = true,
         Flag = "AnchorMobs",
         Callback = function(value)
             if self.config then self.config:Set("AutoFarm", "AnchorMobs", value) end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Position Settings"})
+    -- Position Section
+    local posSection = tab:CreateSection({
+        Name = "Position Settings",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Slider", {
+    posSection:CreateSlider({
         Name = "Fly Height Above Mobs",
-        Range = {5, 100},
-        Increment = 1,
-        CurrentValue = 15,
+        Min = 5,
+        Max = 100,
+        Default = 15,
         Flag = "FlyHeight",
         Callback = function(value)
             if self.config then self.config:Set("AutoFarm", "FlyHeight", value) end
@@ -496,11 +441,11 @@ function MainUI:PopulateFarmTab(tab)
         end
     })
 
-    AddElement(tab, "Slider", {
+    posSection:CreateSlider({
         Name = "Bring Distance (studs)",
-        Range = {50, 500},
-        Increment = 10,
-        CurrentValue = 150,
+        Min = 50,
+        Max = 500,
+        Default = 150,
         Flag = "BringDistance",
         Callback = function(value)
             if self.config then self.config:Set("AutoFarm", "BringDistance", value) end
@@ -508,44 +453,58 @@ function MainUI:PopulateFarmTab(tab)
     })
 end
 
--- Populate Combat Tab
-function MainUI:PopulateCombatTab(tab)
-    AddElement(tab, "Section", {Name = "Auto Combat"})
+-- Create Combat Tab
+function MainUI:CreateCombatTab()
+    local tab = self.window:CreateTab({
+        Name = "Combat",
+        Emoji = "⚔️"
+    })
+    self.tabs.combat = tab
 
-    AddElement(tab, "Toggle", {
+    -- Auto Combat Section
+    local combatSection = tab:CreateSection({
+        Name = "Auto Combat",
+        Side = "Left"
+    })
+
+    combatSection:CreateToggle({
         Name = "Auto Attack",
-        CurrentValue = true,
+        Default = true,
         Flag = "AutoAttack",
         Callback = function(value)
             if self.config then self.config:Set("Combat", "AutoAttack", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    combatSection:CreateToggle({
         Name = "Auto Skills (Z, X, C, V)",
-        CurrentValue = true,
+        Default = true,
         Flag = "AutoSkills",
         Callback = function(value)
             if self.config then self.config:Set("Combat", "AutoSkills", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    combatSection:CreateToggle({
         Name = "Auto Haki (J Key)",
-        CurrentValue = true,
+        Default = true,
         Flag = "AutoHaki",
         Callback = function(value)
             if self.config then self.config:Set("Combat", "AutoHaki", value) end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Timing"})
+    -- Timing Section
+    local timingSection = tab:CreateSection({
+        Name = "Timing",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Slider", {
+    timingSection:CreateSlider({
         Name = "Attack Cooldown (ms)",
-        Range = {50, 500},
-        Increment = 10,
-        CurrentValue = 100,
+        Min = 50,
+        Max = 500,
+        Default = 100,
         Flag = "AttackCooldown",
         Callback = function(value)
             if self.config then self.config:Set("Combat", "AttackCooldown", value) end
@@ -554,40 +513,57 @@ function MainUI:PopulateCombatTab(tab)
     })
 end
 
--- Populate Teleport Tab
-function MainUI:PopulateTeleportTab(tab)
-    AddElement(tab, "Section", {Name = "Island Teleport"})
+-- Create Teleport Tab
+function MainUI:CreateTeleportTab()
+    local tab = self.window:CreateTab({
+        Name = "Teleport",
+        Emoji = "🧭"
+    })
+    self.tabs.teleport = tab
+
+    -- Island Teleport Section
+    local islandSection = tab:CreateSection({
+        Name = "Island Teleport",
+        Side = "Left"
+    })
 
     local islands = self:GetCurrentIslands()
 
-    AddElement(tab, "Dropdown", {
+    islandSection:CreateDropdown({
         Name = "Select Island",
-        Options = islands,
-        CurrentOption = {},
+        Values = islands,
+        Default = islands[1],
         Flag = "SelectedIsland",
-        Callback = function(option) end
+        Callback = function(value)
+            self.selectedIsland = value
+        end
     })
 
-    AddElement(tab, "Button", {
+    islandSection:CreateButton({
         Name = "Teleport to Island",
         Callback = function()
-            if self.misc then
-                local flags = self.library and self.library.Flags
-                if flags and flags.SelectedIsland then
-                    local island = type(flags.SelectedIsland) == "table" and flags.SelectedIsland[1] or flags.SelectedIsland
+            if self.misc and self.selectedIsland then
+                self.misc:TeleportToIsland(self.selectedIsland)
+            elseif self.library and self.library.Flags and self.library.Flags.SelectedIsland then
+                local island = self.library.Flags.SelectedIsland
+                if self.misc then
                     self.misc:TeleportToIsland(island)
                 end
             end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Teleport Settings"})
+    -- Teleport Settings Section
+    local settingsSection = tab:CreateSection({
+        Name = "Teleport Settings",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Slider", {
+    settingsSection:CreateSlider({
         Name = "Tween Speed (studs/s)",
-        Range = {50, 1000},
-        Increment = 25,
-        CurrentValue = 200,
+        Min = 50,
+        Max = 1000,
+        Default = 200,
         Flag = "TweenSpeed",
         Callback = function(value)
             if self.config then self.config:Set("Teleport", "TweenSpeed", value) end
@@ -596,22 +572,32 @@ function MainUI:PopulateTeleportTab(tab)
     })
 end
 
--- Populate Fruit Tab
-function MainUI:PopulateFruitTab(tab)
-    AddElement(tab, "Section", {Name = "Collection"})
+-- Create Fruit Tab
+function MainUI:CreateFruitTab()
+    local tab = self.window:CreateTab({
+        Name = "Fruit Sniper",
+        Emoji = "🍎"
+    })
+    self.tabs.fruit = tab
 
-    AddElement(tab, "Toggle", {
+    -- Collection Section
+    local collectSection = tab:CreateSection({
+        Name = "Collection",
+        Side = "Left"
+    })
+
+    collectSection:CreateToggle({
         Name = "Auto Collect Fruits",
-        CurrentValue = true,
+        Default = true,
         Flag = "AutoCollect",
         Callback = function(value)
             if self.config then self.config:Set("FruitSniper", "AutoCollect", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    collectSection:CreateToggle({
         Name = "Auto Store Fruits",
-        CurrentValue = false,
+        Default = false,
         Flag = "AutoStore",
         Callback = function(value)
             if self.config then self.config:Set("FruitSniper", "AutoStore", value) end
@@ -619,11 +605,11 @@ function MainUI:PopulateFruitTab(tab)
         end
     })
 
-    AddElement(tab, "Slider", {
+    collectSection:CreateSlider({
         Name = "Store Timeout (seconds)",
-        Range = {2, 10},
-        Increment = 1,
-        CurrentValue = 5,
+        Min = 2,
+        Max = 10,
+        Default = 5,
         Flag = "StoreTimeout",
         Callback = function(value)
             if self.config then self.config:Set("FruitSniper", "StoreTimeout", value) end
@@ -631,31 +617,39 @@ function MainUI:PopulateFruitTab(tab)
         end
     })
 
-    AddElement(tab, "Section", {Name = "Server Hop"})
+    -- Server Hop Section
+    local hopSection = tab:CreateSection({
+        Name = "Server Hop",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Toggle", {
+    hopSection:CreateToggle({
         Name = "Server Hop When No Fruits",
-        CurrentValue = false,
+        Default = false,
         Flag = "ServerHopFruit",
         Callback = function(value)
             if self.config then self.config:Set("FruitSniper", "ServerHop", value) end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Fruit Filters"})
+    -- Fruit Filters Section
+    local filterSection = tab:CreateSection({
+        Name = "Fruit Filters",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Toggle", {
+    filterSection:CreateToggle({
         Name = "Only Mythical Fruits",
-        CurrentValue = false,
+        Default = false,
         Flag = "OnlyMythical",
         Callback = function(value)
             if self.config then self.config:Set("FruitSniper", "OnlyMythical", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    filterSection:CreateToggle({
         Name = "Only Legendary+",
-        CurrentValue = false,
+        Default = false,
         Flag = "OnlyLegendary",
         Callback = function(value)
             if self.config then self.config:Set("FruitSniper", "OnlyLegendary", value) end
@@ -663,51 +657,65 @@ function MainUI:PopulateFruitTab(tab)
     })
 end
 
--- Populate ESP Tab
-function MainUI:PopulateESPTab(tab)
-    AddElement(tab, "Section", {Name = "ESP Types"})
+-- Create ESP Tab
+function MainUI:CreateESPTab()
+    local tab = self.window:CreateTab({
+        Name = "ESP",
+        Emoji = "👁️"
+    })
+    self.tabs.esp = tab
 
-    AddElement(tab, "Toggle", {
+    -- ESP Types Section
+    local typesSection = tab:CreateSection({
+        Name = "ESP Types",
+        Side = "Left"
+    })
+
+    typesSection:CreateToggle({
         Name = "Fruit ESP",
-        CurrentValue = true,
+        Default = true,
         Flag = "FruitESP",
         Callback = function(value)
             if self.config then self.config:Set("ESP", "FruitESP", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    typesSection:CreateToggle({
         Name = "Player ESP",
-        CurrentValue = false,
+        Default = false,
         Flag = "PlayerESP",
         Callback = function(value)
             if self.config then self.config:Set("ESP", "PlayerESP", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    typesSection:CreateToggle({
         Name = "Boss ESP",
-        CurrentValue = true,
+        Default = true,
         Flag = "BossESP",
         Callback = function(value)
             if self.config then self.config:Set("ESP", "BossESP", value) end
         end
     })
 
-    AddElement(tab, "Toggle", {
+    typesSection:CreateToggle({
         Name = "Chest ESP",
-        CurrentValue = false,
+        Default = false,
         Flag = "ChestESP",
         Callback = function(value)
             if self.config then self.config:Set("ESP", "ChestESP", value) end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Display"})
+    -- Display Section
+    local displaySection = tab:CreateSection({
+        Name = "Display",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Toggle", {
+    displaySection:CreateToggle({
         Name = "Show Distance",
-        CurrentValue = true,
+        Default = true,
         Flag = "ShowDistance",
         Callback = function(value)
             if self.config then self.config:Set("ESP", "ShowDistance", value) end
@@ -715,51 +723,35 @@ function MainUI:PopulateESPTab(tab)
     })
 end
 
--- Populate Settings Tab
-function MainUI:PopulateSettingsTab(tab)
-    AddElement(tab, "Section", {Name = "Keybinds"})
+-- Create Settings Tab
+function MainUI:CreateSettingsTab()
+    local tab = self.window:CreateTab({
+        Name = "Settings",
+        Emoji = "⚙️",
+        IsSettings = true
+    })
+    self.tabs.settings = tab
 
-    AddElement(tab, "Keybind", {
-        Name = "Toggle Auto Farm",
-        CurrentKeybind = "U",
-        Flag = "KeyAutoFarm",
-        Callback = function()
-            self:ToggleAutoFarm()
-        end
+    -- Keybinds Section
+    local keybindSection = tab:CreateSection({
+        Name = "Keybinds",
+        Side = "Left"
     })
 
-    AddElement(tab, "Keybind", {
-        Name = "Toggle Fruit Sniper",
-        CurrentKeybind = "I",
-        Flag = "KeyFruitSniper",
-        Callback = function()
-            self:ToggleFruitSniper()
-        end
+    keybindSection:CreateLabel("U = Toggle Auto Farm")
+    keybindSection:CreateLabel("I = Toggle Fruit Sniper")
+    keybindSection:CreateLabel("O = Toggle ESP")
+    keybindSection:CreateLabel("K = Toggle UI")
+
+    -- Utilities Section
+    local utilSection = tab:CreateSection({
+        Name = "Utilities",
+        Side = "Left"
     })
 
-    AddElement(tab, "Keybind", {
-        Name = "Toggle ESP",
-        CurrentKeybind = "O",
-        Flag = "KeyESP",
-        Callback = function()
-            self:ToggleESP()
-        end
-    })
-
-    AddElement(tab, "Keybind", {
-        Name = "Toggle UI",
-        CurrentKeybind = "K",
-        Flag = "KeyToggleUI",
-        Callback = function()
-            self:Toggle()
-        end
-    })
-
-    AddElement(tab, "Section", {Name = "Utilities"})
-
-    AddElement(tab, "Toggle", {
+    utilSection:CreateToggle({
         Name = "No Clip",
-        CurrentValue = false,
+        Default = false,
         Flag = "NoClip",
         Callback = function(value)
             if self.config then self.config:Set("Misc", "NoClip", value) end
@@ -769,64 +761,69 @@ function MainUI:PopulateSettingsTab(tab)
         end
     })
 
-    AddElement(tab, "Toggle", {
+    utilSection:CreateToggle({
         Name = "Full Bright",
-        CurrentValue = false,
+        Default = false,
         Flag = "FullBright",
         Callback = function(value)
             if self.misc then self.misc:SetFullBright(value) end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Server"})
+    -- Server Section
+    local serverSection = tab:CreateSection({
+        Name = "Server",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Button", {
+    serverSection:CreateButton({
         Name = "Server Hop",
         Callback = function()
             if self.misc then self.misc:ServerHop() end
         end
     })
 
-    AddElement(tab, "Button", {
+    serverSection:CreateButton({
         Name = "Rejoin Server",
         Callback = function()
             if self.misc then self.misc:Rejoin() end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Config"})
+    -- Config Section
+    local configSection = tab:CreateSection({
+        Name = "Configuration",
+        Side = "Right"
+    })
 
-    AddElement(tab, "Button", {
+    configSection:CreateButton({
         Name = "Save Configuration",
         Callback = function()
             if self.config then
                 self.config:Save()
-                if self.misc then self.misc:Notify("Config", "Saved!") end
+                self:Notify("Config", "Saved!")
             end
         end
     })
 
-    AddElement(tab, "Button", {
+    configSection:CreateButton({
         Name = "Load Configuration",
         Callback = function()
             if self.config then
                 self.config:Load()
-                if self.misc then self.misc:Notify("Config", "Loaded!") end
+                self:Notify("Config", "Loaded!")
             end
         end
     })
 
-    AddElement(tab, "Section", {Name = "Info"})
-
-    AddElement(tab, "Paragraph", {
-        Title = "Anti-AFK",
-        Content = "Anti-AFK is always enabled automatically."
+    -- Info Section
+    local infoSection = tab:CreateSection({
+        Name = "Info",
+        Side = "Right"
     })
 
-    AddElement(tab, "Paragraph", {
-        Title = "Version",
-        Content = "Blox Fruits Pro v" .. VERSION
-    })
+    infoSection:CreateLabel("Anti-AFK: Always enabled")
+    infoSection:CreateLabel("Version: " .. VERSION)
 end
 
 -- Setup keybinds
@@ -852,8 +849,15 @@ end
 function MainUI:Toggle()
     if self.window and self.window.Toggle then
         self.window:Toggle()
-    elseif self.window and self.window.Visible ~= nil then
-        self.window.Visible = not self.window.Visible
+    elseif self.window and self.window.Minimize and self.window.Restore then
+        -- RenLib uses Minimize/Restore
+        if self.isMinimized then
+            self.window:Restore()
+            self.isMinimized = false
+        else
+            self.window:Minimize()
+            self.isMinimized = true
+        end
     elseif self.fallbackGui then
         self.fallbackGui.Enabled = not self.fallbackGui.Enabled
     end
@@ -861,12 +865,12 @@ end
 
 -- Update status
 function MainUI:UpdateStatus(status)
-    if self.elements.statusParagraph and self.elements.statusParagraph.Set then
+    if self.elements.statusLabel then
         pcall(function()
-            self.elements.statusParagraph:Set({
-                Title = "Current Status",
-                Content = status or "Idle"
-            })
+            -- Try to update label if possible
+            if self.elements.statusLabel.Set then
+                self.elements.statusLabel:Set("Status: " .. (status or "Idle"))
+            end
         end)
     end
 end
@@ -881,7 +885,9 @@ end
 -- Destroy
 function MainUI:Destroy()
     pcall(function()
-        if self.window and self.window.Destroy then
+        if self.window and self.window.Close then
+            self.window:Close()
+        elseif self.window and self.window.Destroy then
             self.window:Destroy()
         end
         if self.fallbackGui then
