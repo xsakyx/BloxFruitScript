@@ -70,7 +70,10 @@ function AutoFarm.new(config, teleport, combat, stateManager)
 
     self.mainLoop = nil
     self.noclipLoop = nil
+    self.mobAuraLoop = nil  -- NEW: Separate loop for mob bringing
     self.noclipEnabled = true
+    self.isTweeningToFarm = false  -- NEW: Track if we're tweening to farm spot
+    self.hasReachedFarmSpot = false  -- NEW: Track if we've reached the farm spot
 
     self.callbacks = {
         onQuestStart = nil,
@@ -157,6 +160,115 @@ function AutoFarm:StopNoclip()
     if self.noclipLoop then
         self.noclipLoop:Disconnect()
         self.noclipLoop = nil
+    end
+end
+
+--[[
+    MOB AURA SYSTEM
+    This runs on RenderStepped (every frame) to continuously:
+    1. Bring all nearby mobs to player
+    2. Expand their hitboxes
+    3. Anchor them in place
+    4. Attack them all simultaneously
+
+    This is the KEY technique that makes mob farming work!
+]]
+function AutoFarm:StartMobAura()
+    if self.mobAuraLoop then return end
+
+    print("[AutoFarm] Mob Aura started")
+
+    self.mobAuraLoop = RunService.RenderStepped:Connect(function()
+        if not self.enabled then return end
+        if not self.currentMobName then return end
+        if not self.hasReachedFarmSpot then return end
+
+        local character, _, rootPart = GetCharacter()
+        if not rootPart then return end
+
+        -- Get settings
+        local shouldBring = self:GetBringMobs()
+        local shouldAnchor = self:GetAnchorMobs()
+        local shouldExpandHitbox = self:GetExpandHitbox()
+        local hitboxSize = self:GetHitboxSize()
+        local bringDistance = self:GetBringDistance()
+        local flyHeight = self:GetFlyHeight()
+
+        -- Get all enemies of the target type
+        local enemies = self:FindAllEnemies(self.currentMobName)
+
+        -- Calculate farm position (where player is flying)
+        local farmPos = rootPart.Position - Vector3.new(0, flyHeight, 0)
+
+        for _, data in ipairs(enemies) do
+            local distance = (data.RootPart.Position - rootPart.Position).Magnitude
+
+            -- Only process mobs within bring distance
+            if distance <= bringDistance then
+                pcall(function()
+                    -- STEP 1: Claim network ownership (critical for client-side manipulation)
+                    if sethiddenproperty then
+                        pcall(function()
+                            sethiddenproperty(data.RootPart, "NetworkOwnershipRule", 2) -- Manual
+                        end)
+                    end
+
+                    -- STEP 2: Expand hitbox for easier hits
+                    if shouldExpandHitbox then
+                        data.RootPart.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                        data.RootPart.Transparency = 1
+                        data.RootPart.CanCollide = false
+
+                        -- Also expand other parts
+                        for _, partName in ipairs({"Torso", "Head", "UpperTorso", "LowerTorso"}) do
+                            local part = data.Entity:FindFirstChild(partName)
+                            if part and part:IsA("BasePart") then
+                                part.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                                part.Transparency = 1
+                                part.CanCollide = false
+                            end
+                        end
+                    end
+
+                    -- STEP 3: Bring mob to player (teleport using CFrame)
+                    if shouldBring then
+                        -- Random offset so mobs don't stack perfectly
+                        local offset = Vector3.new(
+                            math.random(-3, 3),
+                            0,
+                            math.random(-3, 3)
+                        )
+                        data.RootPart.CFrame = CFrame.new(farmPos + offset)
+
+                        -- Zero all velocity
+                        data.RootPart.Velocity = Vector3.zero
+                        pcall(function()
+                            data.RootPart.AssemblyLinearVelocity = Vector3.zero
+                            data.RootPart.AssemblyAngularVelocity = Vector3.zero
+                        end)
+                    end
+
+                    -- STEP 4: Anchor to prevent movement
+                    if shouldAnchor then
+                        data.RootPart.Anchored = true
+                    end
+
+                    -- Disable collision on all parts
+                    for _, part in pairs(data.Entity:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.CanCollide = false
+                        end
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+function AutoFarm:StopMobAura()
+    if self.mobAuraLoop then
+        self.mobAuraLoop:Disconnect()
+        self.mobAuraLoop = nil
     end
 end
 
@@ -712,31 +824,31 @@ function AutoFarm:HandleNavigatingState()
                 local pos = npcData.Position
                 local targetCFrame = CFrame.new(pos[1], pos[2] + 3, pos[3])
 
-                -- Teleport to quest giver (direct teleport for speed)
                 local character, _, rootPart = GetCharacter()
-                if rootPart then
-                    rootPart.CFrame = targetCFrame
+                if not rootPart then return end
+
+                local distance = (rootPart.Position - targetCFrame.Position).Magnitude
+
+                -- Use tweening for long distances (anti-cheat safe)
+                if distance > 100 and self.teleport and not self.isTweeningToFarm then
+                    self.isTweeningToFarm = true
+                    print("[AutoFarm] Tweening to quest giver:", data.questName)
+
+                    self.teleport:TweenTo(targetCFrame, function(success)
+                        self.isTweeningToFarm = false
+                        -- After arriving, handle quest logic
+                        task.wait(0.5)
+                        self:HandleQuestGiverArrival(data)
+                    end, {speed = 200, bypassWalls = true})
+                    return
                 end
 
-                task.wait(0.5)
-
-                if data.turnIn then
-                    -- Turning in quest - wait then go back to IDLE to find next quest
-                    print("[AutoFarm] Turned in quest, finding next quest...")
-                    task.wait(1)
-
-                    if self.callbacks.onQuestComplete then
-                        self.callbacks.onQuestComplete(data.questName)
-                    end
-
-                    -- IMPORTANT: Go back to IDLE to find the next best quest
-                    self.stateManager:SetState(self.stateManager:GetStates().IDLE)
-                else
-                    -- Getting new quest
-                    print("[AutoFarm] Accepting quest:", data.questName)
-                    self:AcceptQuest(data.questName)
-                    task.wait(0.5)
-                    self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
+                -- Already close or tween complete - handle quest
+                if distance <= 100 then
+                    -- Move to exact position
+                    rootPart.CFrame = targetCFrame
+                    task.wait(0.3)
+                    self:HandleQuestGiverArrival(data)
                 end
             else
                 -- No NPC data, try direct quest accept
@@ -751,17 +863,43 @@ function AutoFarm:HandleNavigatingState()
         end
 
     elseif data.target == "mobSpawn" then
-        local spawnCFrame = self:GetMobSpawnLocation(data.mobName)
-        if spawnCFrame then
-            -- Direct teleport to mob spawn
-            local character, _, rootPart = GetCharacter()
-            if rootPart then
-                rootPart.CFrame = spawnCFrame + Vector3.new(0, 15, 0)
-            end
-        end
+        -- For mob spawn, we go to COMBAT and let it handle tweening
+        self.hasReachedFarmSpot = false
         self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
             mobName = data.mobName
         })
+    end
+end
+
+-- Helper function to handle quest giver interaction
+function AutoFarm:HandleQuestGiverArrival(data)
+    if data.turnIn then
+        -- Turning in quest - wait then go back to IDLE to find next quest
+        print("[AutoFarm] Turning in quest:", data.questName)
+        task.wait(1)
+
+        if self.callbacks.onQuestComplete then
+            self.callbacks.onQuestComplete(data.questName)
+        end
+
+        -- IMPORTANT: Go back to IDLE to find the next best quest
+        print("[AutoFarm] Quest turned in, finding next quest...")
+        self.stateManager:SetState(self.stateManager:GetStates().IDLE)
+    else
+        -- Getting new quest
+        print("[AutoFarm] Accepting new quest:", data.questName)
+        local accepted = self:AcceptQuest(data.questName)
+
+        if accepted then
+            print("[AutoFarm] Quest accepted successfully!")
+        else
+            print("[AutoFarm] Quest accept may have failed, retrying...")
+            task.wait(0.5)
+            self:AcceptQuest(data.questName)
+        end
+
+        task.wait(0.5)
+        self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
     end
 end
 
@@ -772,6 +910,8 @@ function AutoFarm:HandleCombatState()
     -- First check if quest is complete
     local current, total = self:GetQuestProgress()
     if current and total and current >= total then
+        -- Quest done, reset farm spot flag and go to questing
+        self.hasReachedFarmSpot = false
         self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
         return
     end
@@ -781,6 +921,7 @@ function AutoFarm:HandleCombatState()
     if not farmPosition then
         local spawnCFrame = self:GetMobSpawnLocation(mobName)
         if spawnCFrame then
+            self.hasReachedFarmSpot = false
             self.stateManager:SetState(self.stateManager:GetStates().NAVIGATING, {
                 target = "mobSpawn",
                 mobName = mobName
@@ -794,11 +935,51 @@ function AutoFarm:HandleCombatState()
     -- Store farm position for consistency
     self.farmPosition = farmPosition
 
-    -- Fly above the farm position
+    local character, _, rootPart = GetCharacter()
+    if not rootPart then return end
+
+    local flyHeight = self:GetFlyHeight()
+    local targetPos = farmPosition + Vector3.new(0, flyHeight, 0)
+    local distanceToFarm = (rootPart.Position - targetPos).Magnitude
+
+    -- TWEEN TO FARM SPOT FIRST (anti-cheat safe)
+    -- Only tween if we haven't reached the spot yet
+    if not self.hasReachedFarmSpot and distanceToFarm > 50 then
+        if not self.isTweeningToFarm then
+            self.isTweeningToFarm = true
+            print("[AutoFarm] Tweening to farm spot for:", mobName)
+
+            -- Use teleport module to tween (safer for anti-cheat)
+            if self.teleport then
+                self.teleport:TweenTo(CFrame.new(targetPos), function(success)
+                    self.isTweeningToFarm = false
+                    if success then
+                        print("[AutoFarm] Reached farm spot, starting mob aura")
+                        self.hasReachedFarmSpot = true
+                    end
+                end, {speed = 200, bypassWalls = true})
+            else
+                -- Fallback: direct teleport if no tween module
+                rootPart.CFrame = CFrame.new(targetPos)
+                self.isTweeningToFarm = false
+                self.hasReachedFarmSpot = true
+            end
+        end
+        return -- Wait for tween to complete
+    end
+
+    -- Mark as reached if close enough
+    if distanceToFarm <= 50 then
+        self.hasReachedFarmSpot = true
+    end
+
+    -- NOW WE'RE AT THE FARM SPOT - Do combat!
+
+    -- Fly above the farm position (keep position stable)
     self:FlyAbove(farmPosition)
 
-    -- Group all nearby mobs to center (with hitbox expansion)
-    self:GroupMobs(mobName, farmPosition)
+    -- Mob aura loop handles bringing mobs - just ensure it's running
+    -- GroupMobs is now handled by the mob aura loop (RenderStepped)
 
     -- Enable haki
     self:EnableHaki()
@@ -806,14 +987,9 @@ function AutoFarm:HandleCombatState()
     -- Equip weapon using Combat module
     if self.combat then
         self.combat:EquipSelectedWeapon()
-        -- Set target for combat
-        local nearestEnemy = self:FindEnemy(mobName)
-        if nearestEnemy then
-            self.combat:SetTarget(nearestEnemy)
-        end
     end
 
-    -- Attack enemies using proven methods
+    -- Attack ALL enemies in range (not just nearest)
     self:AttackEnemies(mobName)
 
     -- Use skills
@@ -827,8 +1003,15 @@ function AutoFarm:Start()
     if self.enabled then return end
     self.enabled = true
 
+    -- Reset state flags
+    self.hasReachedFarmSpot = false
+    self.isTweeningToFarm = false
+
     -- Start noclip
     self:StartNoclip()
+
+    -- Start mob aura (runs on RenderStepped for smooth mob bringing)
+    self:StartMobAura()
 
     -- Set weapon type in combat
     if self.combat then
@@ -868,12 +1051,14 @@ function AutoFarm:Start()
     -- Set initial state
     self.stateManager:SetState(states.IDLE)
 
-    print("[AutoFarm] Started - Continuous farming enabled")
+    print("[AutoFarm] Started - Continuous farming with Mob Aura enabled")
 end
 
 -- Stop auto farming
 function AutoFarm:Stop()
     self.enabled = false
+    self.hasReachedFarmSpot = false
+    self.isTweeningToFarm = false
 
     if self.mainLoop then
         self.mainLoop:Disconnect()
@@ -881,6 +1066,7 @@ function AutoFarm:Stop()
     end
 
     self:StopNoclip()
+    self:StopMobAura()
 
     if self.combat then
         self.combat:Stop()
