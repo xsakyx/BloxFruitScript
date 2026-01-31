@@ -63,7 +63,7 @@ function MainUI.new()
     -- State tracking
     self.autoFarmEnabled = false
     self.fruitSniperEnabled = false
-    self.espEnabled = false
+    self.noClipEnabled = true  -- NoClip enabled by default
 
     -- Selected island for teleport
     self.selectedIsland = nil
@@ -200,19 +200,16 @@ function MainUI:ToggleFruitSniper()
     self:Notify("Fruit Sniper", self.fruitSniperEnabled and "Enabled" or "Disabled")
 end
 
-function MainUI:ToggleESP()
-    self.espEnabled = not self.espEnabled
-    if self.config then
-        self.config:Set("ESP", "Enabled", self.espEnabled)
-    end
-    if self.esp then
-        if self.espEnabled then
-            self.esp:Start()
+function MainUI:ToggleNoClip()
+    self.noClipEnabled = not self.noClipEnabled
+    if self.misc then
+        if self.noClipEnabled then
+            self.misc:StartNoClip()
         else
-            self.esp:Stop()
+            self.misc:StopNoClip()
         end
     end
-    self:Notify("ESP", self.espEnabled and "Enabled" or "Disabled")
+    self:Notify("NoClip", self.noClipEnabled and "Enabled" or "Disabled")
 end
 
 -- Notification helper
@@ -267,7 +264,6 @@ function MainUI:CreateWindow()
     self:CreateCombatTab()
     self:CreateTeleportTab()
     self:CreateFruitTab()
-    self:CreateESPTab()
     self:CreateSettingsTab()
 
     -- Setup keybinds
@@ -316,15 +312,13 @@ function MainUI:CreateMainTab()
         end
     })
 
-    self.elements.espToggle = quickSection:CreateToggle({
-        Name = "ESP [O]",
-        Default = false,
-        Flag = "MainESP",
+    self.elements.noClipToggle = quickSection:CreateToggle({
+        Name = "NoClip [O]",
+        Default = true,
+        Flag = "MainNoClip",
         Callback = function(value)
-            self.espEnabled = value
-            if self.config then self.config:Set("ESP", "Enabled", value) end
-            if self.esp then
-                if value then self.esp:Start() else self.esp:Stop() end
+            if self.misc then
+                if value then self.misc:StartNoClip() else self.misc:StopNoClip() end
             end
         end
     })
@@ -657,72 +651,6 @@ function MainUI:CreateFruitTab()
     })
 end
 
--- Create ESP Tab
-function MainUI:CreateESPTab()
-    local tab = self.window:CreateTab({
-        Name = "ESP",
-        Emoji = "👁️"
-    })
-    self.tabs.esp = tab
-
-    -- ESP Types Section
-    local typesSection = tab:CreateSection({
-        Name = "ESP Types",
-        Side = "Left"
-    })
-
-    typesSection:CreateToggle({
-        Name = "Fruit ESP",
-        Default = true,
-        Flag = "FruitESP",
-        Callback = function(value)
-            if self.config then self.config:Set("ESP", "FruitESP", value) end
-        end
-    })
-
-    typesSection:CreateToggle({
-        Name = "Player ESP",
-        Default = false,
-        Flag = "PlayerESP",
-        Callback = function(value)
-            if self.config then self.config:Set("ESP", "PlayerESP", value) end
-        end
-    })
-
-    typesSection:CreateToggle({
-        Name = "Boss ESP",
-        Default = true,
-        Flag = "BossESP",
-        Callback = function(value)
-            if self.config then self.config:Set("ESP", "BossESP", value) end
-        end
-    })
-
-    typesSection:CreateToggle({
-        Name = "Chest ESP",
-        Default = false,
-        Flag = "ChestESP",
-        Callback = function(value)
-            if self.config then self.config:Set("ESP", "ChestESP", value) end
-        end
-    })
-
-    -- Display Section
-    local displaySection = tab:CreateSection({
-        Name = "Display",
-        Side = "Right"
-    })
-
-    displaySection:CreateToggle({
-        Name = "Show Distance",
-        Default = true,
-        Flag = "ShowDistance",
-        Callback = function(value)
-            if self.config then self.config:Set("ESP", "ShowDistance", value) end
-        end
-    })
-end
-
 -- Create Settings Tab
 function MainUI:CreateSettingsTab()
     local tab = self.window:CreateTab({
@@ -740,7 +668,7 @@ function MainUI:CreateSettingsTab()
 
     keybindSection:CreateLabel("U = Toggle Auto Farm")
     keybindSection:CreateLabel("I = Toggle Fruit Sniper")
-    keybindSection:CreateLabel("O = Toggle ESP")
+    keybindSection:CreateLabel("O = Toggle NoClip")
     keybindSection:CreateLabel("K = Toggle UI")
 
     -- Utilities Section
@@ -838,7 +766,7 @@ function MainUI:SetupKeybinds()
         elseif input.KeyCode == Enum.KeyCode.I then
             self:ToggleFruitSniper()
         elseif input.KeyCode == Enum.KeyCode.O then
-            self:ToggleESP()
+            self:ToggleNoClip()
         elseif input.KeyCode == Enum.KeyCode.K then
             self:Toggle()
         end

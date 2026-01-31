@@ -407,13 +407,13 @@ end
 
 -- Start (Anti-AFK is already auto-started in constructor)
 function Misc:Start()
+    -- Start NoClip by default (essential for farming)
+    self:StartNoClip()
+    print("[Misc] NoClip enabled by default")
+
     if self.config then
         if self.config:Get("Misc", "InfiniteEnergy") then
             self:StartInfiniteEnergy()
-        end
-
-        if self.config:Get("Misc", "NoClip") then
-            self:StartNoClip()
         end
     end
 end

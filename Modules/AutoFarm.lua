@@ -461,10 +461,24 @@ function AutoFarm:GroupMobs(mobName, centerPosition)
     local hitboxSize = self:GetHitboxSize()
     local groupedCount = 0
 
+    -- Get player position for bringing mobs
+    local character, _, rootPart = GetCharacter()
+    if not rootPart then return 0 end
+
+    -- Calculate bring position (in front of player, slightly below)
+    local bringPosition = centerPosition
+
     for _, data in ipairs(enemies) do
-        local distance = (data.RootPart.Position - centerPosition).Magnitude
+        local distance = (data.RootPart.Position - rootPart.Position).Magnitude
 
         pcall(function()
+            -- Try to claim network ownership (allows client-side manipulation)
+            if sethiddenproperty then
+                pcall(function()
+                    sethiddenproperty(data.RootPart, "NetworkOwnership", 0)
+                end)
+            end
+
             -- HITBOX EXPANSION (always do this for easier hits)
             -- This is the key technique from working scripts
             if shouldExpandHitbox then
@@ -480,28 +494,39 @@ function AutoFarm:GroupMobs(mobName, centerPosition)
                     torso.Transparency = 1
                     torso.CanCollide = false
                 end
+
+                -- Expand Head too
+                local head = data.Entity:FindFirstChild("Head")
+                if head then
+                    head.Size = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+                    head.Transparency = 1
+                    head.CanCollide = false
+                end
             end
 
-            -- BRING MOBS TO CENTER (teleport using CFrame)
+            -- BRING MOBS TO PLAYER (teleport using CFrame)
+            -- This runs every frame so it keeps mobs in place
             if shouldBring and distance <= bringDistance then
                 -- Teleport enemy to center with small random offset
                 local offset = Vector3.new(
                     math.random(-MOB_GROUP_RADIUS, MOB_GROUP_RADIUS),
-                    0,
+                    -2, -- Slightly below player
                     math.random(-MOB_GROUP_RADIUS, MOB_GROUP_RADIUS)
                 )
-                data.RootPart.CFrame = CFrame.new(centerPosition + offset)
+                data.RootPart.CFrame = CFrame.new(bringPosition + offset)
 
-                -- Zero velocity to stop movement
+                -- Zero velocity to stop movement (all methods)
                 data.RootPart.Velocity = Vector3.new(0, 0, 0)
-                data.RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                data.RootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                pcall(function()
+                    data.RootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    data.RootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                end)
 
                 groupedCount = groupedCount + 1
             end
 
-            -- ANCHOR MOBS (stop them from moving)
-            if shouldAnchor then
+            -- ANCHOR MOBS (stop them from moving) - Only if bringing is enabled
+            if shouldAnchor and shouldBring then
                 data.RootPart.Anchored = true
             end
 
@@ -642,10 +667,14 @@ function AutoFarm:HandleIdleState()
 end
 
 function AutoFarm:HandleQuestingState()
+    -- Check if we have an active quest in the UI
     if not self:HasActiveQuest() then
+        -- No active quest - need to get one from quest giver
+        print("[AutoFarm] No active quest, going to quest giver:", self.currentQuest)
         self.stateManager:SetState(self.stateManager:GetStates().NAVIGATING, {
             target = "questGiver",
-            questName = self.currentQuest
+            questName = self.currentQuest,
+            turnIn = false  -- Not turning in, getting new quest
         })
         return
     end
@@ -656,6 +685,8 @@ function AutoFarm:HandleQuestingState()
         self.requiredKills = total
 
         if current >= total then
+            -- Quest complete! Go turn it in
+            print("[AutoFarm] Quest complete! Going to turn in:", self.currentQuest)
             self.stateManager:SetState(self.stateManager:GetStates().NAVIGATING, {
                 target = "questGiver",
                 questName = self.currentQuest,
@@ -665,7 +696,7 @@ function AutoFarm:HandleQuestingState()
         end
     end
 
-    -- Go to combat state
+    -- Go to combat state to kill mobs
     self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
         mobName = self.currentMobName
     })
@@ -681,45 +712,56 @@ function AutoFarm:HandleNavigatingState()
                 local pos = npcData.Position
                 local targetCFrame = CFrame.new(pos[1], pos[2] + 3, pos[3])
 
-                self.teleport:TweenTo(targetCFrame, function(success)
-                    if success then
-                        task.wait(0.5)
+                -- Teleport to quest giver (direct teleport for speed)
+                local character, _, rootPart = GetCharacter()
+                if rootPart then
+                    rootPart.CFrame = targetCFrame
+                end
 
-                        if data.turnIn then
-                            task.wait(1)
-                            if self.callbacks.onQuestComplete then
-                                self.callbacks.onQuestComplete(data.questName)
-                            end
-                        else
-                            self:AcceptQuest(data.questName)
-                        end
+                task.wait(0.5)
 
-                        self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
-                    else
-                        task.wait(1)
-                        self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
+                if data.turnIn then
+                    -- Turning in quest - wait then go back to IDLE to find next quest
+                    print("[AutoFarm] Turned in quest, finding next quest...")
+                    task.wait(1)
+
+                    if self.callbacks.onQuestComplete then
+                        self.callbacks.onQuestComplete(data.questName)
                     end
-                end)
+
+                    -- IMPORTANT: Go back to IDLE to find the next best quest
+                    self.stateManager:SetState(self.stateManager:GetStates().IDLE)
+                else
+                    -- Getting new quest
+                    print("[AutoFarm] Accepting quest:", data.questName)
+                    self:AcceptQuest(data.questName)
+                    task.wait(0.5)
+                    self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
+                end
             else
+                -- No NPC data, try direct quest accept
+                print("[AutoFarm] No NPC position data, trying direct quest accept")
+                self:AcceptQuest(data.questName)
                 self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
             end
         else
-            self.stateManager:SetState(self.stateManager:GetStates().QUESTING)
+            -- No NPC data at all, go back to idle
+            print("[AutoFarm] No NPC data, returning to IDLE")
+            self.stateManager:SetState(self.stateManager:GetStates().IDLE)
         end
 
     elseif data.target == "mobSpawn" then
         local spawnCFrame = self:GetMobSpawnLocation(data.mobName)
         if spawnCFrame then
-            self.teleport:TweenTo(spawnCFrame, function(success)
-                self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
-                    mobName = data.mobName
-                })
-            end)
-        else
-            self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
-                mobName = data.mobName
-            })
+            -- Direct teleport to mob spawn
+            local character, _, rootPart = GetCharacter()
+            if rootPart then
+                rootPart.CFrame = spawnCFrame + Vector3.new(0, 15, 0)
+            end
         end
+        self.stateManager:SetState(self.stateManager:GetStates().COMBAT, {
+            mobName = data.mobName
+        })
     end
 end
 

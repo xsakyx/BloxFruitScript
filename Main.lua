@@ -5,12 +5,14 @@
     Features:
     - Auto Quest Farm (auto-select best quest, kill mobs, turn in)
     - Fruit Sniper (detect and collect fruits, server hop)
-    - Boss Farm (detect boss spawns, kill, collect drops)
-    - Mastery Farm (grind weapon/fruit mastery)
-    - ESP (fruits, bosses, players, mobs)
+    - Hitbox Expansion & Mob Bring (for easier farming)
+    - NoClip (walk through walls)
     - Anti-AFK, Auto-Rejoin, Server Hop
 
-    Uses tween-based teleportation (no direct TP)
+    Combat Methods:
+    - firetouchinterest (most reliable)
+    - VirtualInputManager (M1 clicks)
+    - Tool:Activate()
 ]]
 
 -- Script configuration
@@ -222,7 +224,7 @@ local function Initialize()
     local autoFarm = modules.AutoFarm and modules.AutoFarm.new(config, teleport, combat, stateManager) or nil
     local fruitSniper = modules.FruitSniper and modules.FruitSniper.new(config, teleport) or nil
     local esp = modules.ESP and modules.ESP.new(config) or nil
-    local misc = modules.Misc and modules.Misc.new(config) or nil
+    local misc = modules.Misc and modules.Misc.new(config, teleport) or nil
 
     local instances = {
         config = config,
@@ -334,7 +336,7 @@ local function Initialize()
     print("[BloxFruits] Quick Keybinds:")
     print("  U = Toggle Auto Farm")
     print("  I = Toggle Fruit Sniper")
-    print("  O = Toggle ESP")
+    print("  O = Toggle NoClip")
     print("  K = Toggle UI")
 
     if misc then
