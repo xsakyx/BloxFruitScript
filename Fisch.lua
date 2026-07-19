@@ -5546,5 +5546,44 @@ else
     environment = getfenv()
 end
 
-local entry = module.build(environment)
-return entry()
+local pathByPrototype = {}
+local lastPrototype, lastRegisters, lastPC, lastOpcode
+
+local function trace(prototype, _, registers, pc, opcode)
+    lastPrototype = prototype
+    lastRegisters = registers
+    lastPC = pc
+    lastOpcode = opcode
+end
+
+local entry, buildInfo = module.build(environment, trace)
+for path, prototype in pairs(buildInfo.byPath) do
+    pathByPrototype[prototype] = path
+end
+
+local ok, result = xpcall(entry, function(message)
+    return tostring(message)
+end)
+if ok then return result end
+
+local function kindAt(index)
+    if index == nil or lastRegisters == nil then return "nil" end
+    local value = lastRegisters[index]
+    local kindOK, kind = pcall(function()
+        return typeof and typeof(value) or type(value)
+    end)
+    return kindOK and tostring(kind) or type(value)
+end
+
+local q = lastPrototype and lastPrototype[1][lastPC]
+local a = lastPrototype and lastPrototype[8][lastPC]
+local r = lastPrototype and lastPrototype[9][lastPC]
+local m = lastPrototype and lastPrototype[11][lastPC]
+local report = string.format(
+    "[BHDBG] path=%s pc=%s opcode=%s q=%s(%s) a=%s(%s) r=%s(%s) m=%s(%s) original=%s",
+    tostring(pathByPrototype[lastPrototype] or "?"), tostring(lastPC), tostring(lastOpcode),
+    tostring(q), kindAt(q), tostring(a), kindAt(a),
+    tostring(r), kindAt(r), tostring(m), kindAt(m), tostring(result)
+)
+pcall(function() writefile("BH_DEBUG_REPORT.txt", report) end)
+error(report, 0)
