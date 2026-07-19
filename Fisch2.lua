@@ -21,7 +21,7 @@ if type(old) == "table" and type(old.Unload) == "function" then
     pcall(old.Unload)
 end
 
-local Runtime = {alive = true, connections = {}, version = "1.0.2-blackhub-reel"}
+local Runtime = {alive = true, connections = {}, version = "1.0.3-blackhub-big-bar"}
 env.__BLACKHUB_RECONSTRUCTED = Runtime
 
 local ROOT = "BlackHubReconstructed"
@@ -332,6 +332,8 @@ local function clickGuiButton(button)
     end)
 end
 
+local BLACKHUB_PLAYERBAR_SIZE = UDim2.new(1000, 0, 1, 0)
+
 local function normalReel()
     local playerGui = player:FindFirstChildOfClass("PlayerGui")
     local reel = playerGui and playerGui:FindFirstChild("reel")
@@ -341,8 +343,8 @@ local function normalReel()
     if not bar then return true end
     local playerBar = bar:FindFirstChild("playerbar")
     if playerBar and playerBar:IsA("GuiObject") then
-        -- BlackHub-style reel: make the control bar cover the minigame instead of tracking the fish.
-        playerBar.Size = UDim2.new(1, 0, 1, 0)
+        -- Size only: no fish tracking, positioning, input, or instant-finish remote.
+        playerBar.Size = BLACKHUB_PLAYERBAR_SIZE
     end
     return true
 end
@@ -525,7 +527,7 @@ addToggle("autoFish", "Master Auto Fish")
 addToggle("autoEquip", "Auto Equip Rod")
 addToggle("autoCast", "Auto Cast")
 addToggle("autoShake", "Auto Shake")
-addToggle("autoReel", "Auto Reel (BlackHub large bar)")
+addToggle("autoReel", "Auto Reel (BlackHub big bar)")
 addNumber("castPower", "Cast power", 1, 100)
 addNumber("castInterval", "Recast delay (seconds)", 0.5, 15)
 addNumber("shakeInterval", "Shake interval (seconds)", 0.08, 0.5)
@@ -553,7 +555,7 @@ addButton("Run Diagnostics", function()
     log("rod: " .. (rod and fullName(rod) or "not found"))
     log("cast remote: " .. (findCastRemote(rod) and fullName(findCastRemote(rod)) or "not found"))
     log("cast method: normal held primary input")
-    log("reel method: BlackHub-style enlarged playerbar")
+    log("reel method: BlackHub oversized playerbar only")
     log("sell-all remote: " .. (findRemote({"sellall", "SellAll", "sellallfish", "SellAllFish", "sellallitems", "SellAllItems"}, true) and "found" or "not found"))
     setStatus("Diagnostics written to " .. LOG_FILE)
 end)
@@ -613,6 +615,14 @@ local function updateRendering()
         pcall(RunService.Set3dRenderingEnabled, RunService, not renderingDisabled)
     end
 end
+
+-- The reel UI rewrites its bar every frame, so keep only the BlackHub size
+-- override alive at render cadence. This never moves or tracks the bar.
+connect(RunService.RenderStepped, function()
+    if Runtime.alive and State.autoFish and State.autoReel then
+        normalReel()
+    end
+end)
 
 task.spawn(function()
     while Runtime.alive do
