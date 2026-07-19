@@ -21,7 +21,7 @@ if type(old) == "table" and type(old.Unload) == "function" then
     pcall(old.Unload)
 end
 
-local Runtime = {alive = true, connections = {}, version = "1.0.1-fishing-fix"}
+local Runtime = {alive = true, connections = {}, version = "1.0.2-blackhub-reel"}
 env.__BLACKHUB_RECONSTRUCTED = Runtime
 
 local ROOT = "BlackHubReconstructed"
@@ -340,10 +340,9 @@ local function normalReel()
     local bar = reel:FindFirstChild("bar")
     if not bar then return true end
     local playerBar = bar:FindFirstChild("playerbar")
-    local fish = bar:FindFirstChild("fish")
-    if playerBar and fish and playerBar:IsA("GuiObject") and fish:IsA("GuiObject") then
-        -- Let the normal client minigame progress; never complete it through a server remote.
-        playerBar.Position = fish.Position
+    if playerBar and playerBar:IsA("GuiObject") then
+        -- BlackHub-style reel: make the control bar cover the minigame instead of tracking the fish.
+        playerBar.Size = UDim2.new(1, 0, 1, 0)
     end
     return true
 end
@@ -526,7 +525,7 @@ addToggle("autoFish", "Master Auto Fish")
 addToggle("autoEquip", "Auto Equip Rod")
 addToggle("autoCast", "Auto Cast")
 addToggle("autoShake", "Auto Shake")
-addToggle("autoReel", "Auto Reel (normal minigame)")
+addToggle("autoReel", "Auto Reel (BlackHub large bar)")
 addNumber("castPower", "Cast power", 1, 100)
 addNumber("castInterval", "Recast delay (seconds)", 0.5, 15)
 addNumber("shakeInterval", "Shake interval (seconds)", 0.08, 0.5)
@@ -554,7 +553,7 @@ addButton("Run Diagnostics", function()
     log("rod: " .. (rod and fullName(rod) or "not found"))
     log("cast remote: " .. (findCastRemote(rod) and fullName(findCastRemote(rod)) or "not found"))
     log("cast method: normal held primary input")
-    log("reel method: normal playerbar tracking (no finish remote)")
+    log("reel method: BlackHub-style enlarged playerbar")
     log("sell-all remote: " .. (findRemote({"sellall", "SellAll", "sellallfish", "SellAllFish", "sellallitems", "SellAllItems"}, true) and "found" or "not found"))
     setStatus("Diagnostics written to " .. LOG_FILE)
 end)
