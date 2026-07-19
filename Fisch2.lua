@@ -21,7 +21,7 @@ if type(old) == "table" and type(old.Unload) == "function" then
     pcall(old.Unload)
 end
 
-local Runtime = {alive = true, connections = {}, version = "1.0.3-blackhub-big-bar"}
+local Runtime = {alive = true, connections = {}, version = "1.0.4-blackhub-reel-lifecycle"}
 env.__BLACKHUB_RECONSTRUCTED = Runtime
 
 local ROOT = "BlackHubReconstructed"
@@ -332,22 +332,45 @@ local function clickGuiButton(button)
     end)
 end
 
-local BLACKHUB_PLAYERBAR_SIZE = UDim2.new(1000, 0, 1, 0)
+-- Exact value recovered from BlackHub's handleReelGui routine. It has to be
+-- installed when the reel GUI enters PlayerGui, before the reel LocalScript
+-- snapshots AbsoluteSize for its control/collision calculations.
+local BLACKHUB_PLAYERBAR_SIZE = UDim2.new(1, 0, 1.3, 0)
 
-local function normalReel()
+local function normalReel(reelGui)
     local playerGui = player:FindFirstChildOfClass("PlayerGui")
-    local reel = playerGui and playerGui:FindFirstChild("reel")
+    local reel = reelGui or (playerGui and playerGui:FindFirstChild("reel"))
     if not reel then return false end
+    if normalize(reel.Name) ~= "reel" or not reel:IsA("ScreenGui") then return false end
 
     local bar = reel:FindFirstChild("bar")
     if not bar then return true end
     local playerBar = bar:FindFirstChild("playerbar")
     if playerBar and playerBar:IsA("GuiObject") then
-        -- Size only: no fish tracking, positioning, input, or instant-finish remote.
+        -- Size only: no fish tracking, positioning, input, or finish remote.
         playerBar.Size = BLACKHUB_PLAYERBAR_SIZE
     end
     return true
 end
+
+-- BlackHub applies the size in PlayerGui.ChildAdded, not on RenderStepped.
+-- DescendantAdded covers games that parent the ScreenGui before inserting its
+-- bar children, while preserving the same pre-initialization timing.
+local reelPlayerGui = player:WaitForChild("PlayerGui")
+connect(reelPlayerGui.ChildAdded, function(child)
+    if Runtime.alive and State.autoFish and State.autoReel then
+        normalReel(child)
+    end
+end)
+connect(reelPlayerGui.DescendantAdded, function(descendant)
+    if not (Runtime.alive and State.autoFish and State.autoReel) then return end
+    if not descendant:IsA("GuiObject") or normalize(descendant.Name) ~= "playerbar" then return end
+    local bar = descendant.Parent
+    local reel = bar and bar.Parent
+    if bar and normalize(bar.Name) == "bar" and reel and reel:IsA("ScreenGui") and normalize(reel.Name) == "reel" then
+        descendant.Size = BLACKHUB_PLAYERBAR_SIZE
+    end
+end)
 
 local function sellAll()
     -- Deliberately require a sell-all name. Calling an arbitrary 'sell' remote can sell the held item.
@@ -555,7 +578,7 @@ addButton("Run Diagnostics", function()
     log("rod: " .. (rod and fullName(rod) or "not found"))
     log("cast remote: " .. (findCastRemote(rod) and fullName(findCastRemote(rod)) or "not found"))
     log("cast method: normal held primary input")
-    log("reel method: BlackHub oversized playerbar only")
+    log("reel method: BlackHub early lifecycle control-bar sizing")
     log("sell-all remote: " .. (findRemote({"sellall", "SellAll", "sellallfish", "SellAllFish", "sellallitems", "SellAllItems"}, true) and "found" or "not found"))
     setStatus("Diagnostics written to " .. LOG_FILE)
 end)
@@ -615,14 +638,6 @@ local function updateRendering()
         pcall(RunService.Set3dRenderingEnabled, RunService, not renderingDisabled)
     end
 end
-
--- The reel UI rewrites its bar every frame, so keep only the BlackHub size
--- override alive at render cadence. This never moves or tracks the bar.
-connect(RunService.RenderStepped, function()
-    if Runtime.alive and State.autoFish and State.autoReel then
-        normalReel()
-    end
-end)
 
 task.spawn(function()
     while Runtime.alive do
