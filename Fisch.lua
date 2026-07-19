@@ -21,7 +21,7 @@ if type(old) == "table" and type(old.Unload) == "function" then
     pcall(old.Unload)
 end
 
-local Runtime = {alive = true, connections = {}, version = "1.0.6-blackhub-bigbar"}
+local Runtime = {alive = true, connections = {}, version = "1.0.7-blackhub-internal-reel"}
 env.__BLACKHUB_RECONSTRUCTED = Runtime
 
 local ROOT = "BlackHubReconstructed"
@@ -332,114 +332,353 @@ local function clickGuiButton(button)
     end)
 end
 
--- Exact playerbar value recovered from BlackHub's handleReelGui routine.
-local BLACKHUB_PLAYERBAR_SIZE = UDim2.new(1, 0, 1.3, 0)
+-- BlackHub's reel is not an instant-finish call.  The reel LocalScript keeps
+-- the effective player-bar/hitbox width in Lua state, so changing GuiObject.Size
+-- alone is only cosmetic.  Patch the live controller values and let the game's
+-- ordinary reel loop do all progress and completion work.
 local reelPlayerGui = player:WaitForChild("PlayerGui")
-local activeReelBars = {}
+local reelPatch = {
+    reel = nil,
+    changes = {},
+    tableSlots = setmetatable({}, {__mode = "k"}),
+    functionSlots = setmetatable({}, {__mode = "k"}),
+    applied = 0,
+    attempts = 0,
+    lastScan = 0,
+    reported = false,
+}
 
-local function disconnectReelBar(playerBar, restore)
-    local entry = activeReelBars[playerBar]
-    if not entry then return end
-    activeReelBars[playerBar] = nil
-    for _, connection in ipairs(entry.connections) do
-        pcall(connection.Disconnect, connection)
+local debugLibrary = type(debug) == "table" and debug or nil
+local getUpvalues = debugLibrary and debugLibrary.getupvalues or getupvalues
+local setUpvalue = debugLibrary and debugLibrary.setupvalue or setupvalue
+local getConstants = debugLibrary and debugLibrary.getconstants or getconstants
+local getEnvironment = getfenv
+local getGarbage = getgc
+local getConnections = getconnections
+local getScriptEnvironment = getsenv
+
+local INTERNAL_SIZE_KEYS = {
+    control = true,
+    barsize = true,
+    barwidth = true,
+    playerbarsize = true,
+    playerbarwidth = true,
+    reelbarsize = true,
+    reelbarwidth = true,
+    controlbarsize = true,
+    controlbarwidth = true,
+    hitboxsize = true,
+    hitboxwidth = true,
+    reelhitboxsize = true,
+    reelhitboxwidth = true,
+}
+
+local function clearReelPatchBookkeeping()
+    reelPatch.reel = nil
+    table.clear(reelPatch.changes)
+    reelPatch.tableSlots = setmetatable({}, {__mode = "k"})
+    reelPatch.functionSlots = setmetatable({}, {__mode = "k"})
+    reelPatch.applied = 0
+    reelPatch.attempts = 0
+    reelPatch.lastScan = 0
+    reelPatch.reported = false
+end
+
+local function restoreReelControl()
+    for index = #reelPatch.changes, 1, -1 do
+        local change = reelPatch.changes[index]
+        if change.kind == "table" then
+            pcall(function() change.target[change.key] = change.original end)
+        elseif change.kind == "upvalue" and type(setUpvalue) == "function" then
+            pcall(setUpvalue, change.target, change.key, change.original)
+        end
     end
-    if restore and playerBar.Parent then
-        pcall(function() playerBar.Size = entry.originalSize end)
-        for constraint, parent in pairs(entry.constraints) do
-            if constraint and parent and parent.Parent then
-                pcall(function() constraint.Parent = parent end)
+    clearReelPatchBookkeeping()
+end
+
+local function rememberTableValue(target, key, desired)
+    local slots = reelPatch.tableSlots[target]
+    if not slots then
+        slots = {}
+        reelPatch.tableSlots[target] = slots
+    end
+    local change = slots[key]
+    if not change then
+        change = {kind = "table", target = target, key = key, original = target[key], desired = desired}
+        slots[key] = change
+        reelPatch.changes[#reelPatch.changes + 1] = change
+        reelPatch.applied = reelPatch.applied + 1
+    else
+        change.desired = desired
+    end
+    pcall(function() target[key] = desired end)
+end
+
+local function rememberUpvalue(target, key, original, desired)
+    if type(setUpvalue) ~= "function" or type(key) ~= "number" then return end
+    local slots = reelPatch.functionSlots[target]
+    if not slots then
+        slots = {}
+        reelPatch.functionSlots[target] = slots
+    end
+    local change = slots[key]
+    if not change then
+        change = {kind = "upvalue", target = target, key = key, original = original, desired = desired}
+        slots[key] = change
+        reelPatch.changes[#reelPatch.changes + 1] = change
+        reelPatch.applied = reelPatch.applied + 1
+    else
+        change.desired = desired
+    end
+    pcall(setUpvalue, target, key, desired)
+end
+
+local function enforceRememberedReelValues()
+    for _, change in ipairs(reelPatch.changes) do
+        if change.kind == "table" then
+            pcall(function()
+                if change.target[change.key] ~= change.desired then
+                    change.target[change.key] = change.desired
+                end
+            end)
+        elseif change.kind == "upvalue" and type(setUpvalue) == "function" then
+            pcall(setUpvalue, change.target, change.key, change.desired)
+        end
+    end
+end
+
+local function readUpvalues(callback)
+    if type(getUpvalues) ~= "function" then return nil end
+    local ok, values = pcall(getUpvalues, callback)
+    return ok and type(values) == "table" and values or nil
+end
+
+local function valueContainsTarget(value, targets, depth, seen)
+    if targets[value] then return true end
+    if depth <= 0 or type(value) ~= "table" then return false end
+    seen = seen or {}
+    if seen[value] then return false end
+    seen[value] = true
+    local inspected = 0
+    for key, child in pairs(value) do
+        inspected = inspected + 1
+        if inspected > 100 then break end
+        if targets[key] or targets[child] then return true end
+        if valueContainsTarget(child, targets, depth - 1, seen) then return true end
+    end
+    return false
+end
+
+local function matchingWidthNumber(value, widthScale, widthRatio)
+    if type(value) ~= "number" or value <= 0 or value >= 0.99 then return false end
+    local tolerance = math.max(0.002, math.abs(widthRatio) * 0.025)
+    return (widthScale > 0.01 and math.abs(value - widthScale) <= tolerance)
+        or math.abs(value - widthRatio) <= tolerance
+end
+
+local function internalMaxValue(value, keyName, metrics)
+    local kind = typeof(value)
+    if kind == "number" then
+        if value >= 0 and value < 1.01 then return 1 end
+    elseif kind == "UDim" then
+        return UDim.new(1, 0)
+    elseif kind == "UDim2" then
+        return UDim2.new(1, 0, value.Y.Scale, value.Y.Offset)
+    elseif kind == "Vector2" and metrics.barWidth > 0 then
+        return Vector2.new(metrics.barWidth, value.Y)
+    end
+    return nil
+end
+
+local function patchNamedControllerTable(target, metrics, depth, seen)
+    if type(target) ~= "table" or depth < 0 then return end
+    seen = seen or {}
+    if seen[target] then return end
+    seen[target] = true
+    local inspected = 0
+    for key, value in pairs(target) do
+        inspected = inspected + 1
+        if inspected > 250 then break end
+        if type(key) == "string" and INTERNAL_SIZE_KEYS[normalize(key)] then
+            local desired = internalMaxValue(value, key, metrics)
+            if desired ~= nil and desired ~= value then rememberTableValue(target, key, desired) end
+        elseif matchingWidthNumber(value, metrics.widthScale, metrics.widthRatio) then
+            rememberTableValue(target, key, 1)
+        elseif typeof(value) == "UDim" and value == metrics.playerSize.X then
+            rememberTableValue(target, key, UDim.new(1, 0))
+        elseif typeof(value) == "UDim2" and value == metrics.playerSize then
+            rememberTableValue(target, key, UDim2.new(1, 0, value.Y.Scale, value.Y.Offset))
+        end
+        if type(value) == "table" and depth > 0 then
+            patchNamedControllerTable(value, metrics, depth - 1, seen)
+        end
+    end
+end
+
+local function reelOwnedScript(owner, reel)
+    if typeof(owner) ~= "Instance" or not owner:IsA("LuaSourceContainer") then return false end
+    if owner:IsDescendantOf(reel) then return true end
+    if not owner:IsDescendantOf(reelPlayerGui) then return false end
+    local name = normalize(owner.Name)
+    return string.find(name, "reel", 1, true) ~= nil or string.find(name, "fish", 1, true) ~= nil
+end
+
+local function functionMentionsReel(callback)
+    if type(getConstants) ~= "function" then return false end
+    local ok, constants = pcall(getConstants, callback)
+    if not ok or type(constants) ~= "table" then return false end
+    for _, constant in pairs(constants) do
+        if type(constant) == "string" then
+            local name = normalize(constant)
+            if name == "playerbar" or name == "reel" or name == "reelbar" then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function patchControllerFunction(callback, reel, bar, playerBar, metrics, allowTargetProbe)
+    local relevant = functionMentionsReel(callback)
+    if not relevant and type(getEnvironment) == "function" then
+        local ok, environment = pcall(getEnvironment, callback)
+        local owner = ok and type(environment) == "table" and rawget(environment, "script") or nil
+        relevant = reelOwnedScript(owner, reel)
+    end
+    if not relevant and not allowTargetProbe then return end
+    local values = readUpvalues(callback)
+    if not values then return end
+    if not relevant then
+        local targets = {[reel] = true, [bar] = true, [playerBar] = true}
+        for _, value in pairs(values) do
+            if valueContainsTarget(value, targets, 2) then relevant = true break end
+        end
+    end
+    if not relevant then return end
+
+    for key, value in pairs(values) do
+        if type(value) == "table" then
+            patchNamedControllerTable(value, metrics, 3)
+        elseif type(key) == "number" then
+            local kind = typeof(value)
+            if matchingWidthNumber(value, metrics.widthScale, metrics.widthRatio) then
+                rememberUpvalue(callback, key, value, 1)
+            elseif kind == "UDim" and value == metrics.playerSize.X then
+                rememberUpvalue(callback, key, value, UDim.new(1, 0))
+            elseif kind == "UDim2" and value == metrics.playerSize then
+                rememberUpvalue(callback, key, value, UDim2.new(1, 0, value.Y.Scale, value.Y.Offset))
+            elseif kind == "Vector2" and metrics.playerWidth > 0 and math.abs(value.X - metrics.playerWidth) <= 2 then
+                rememberUpvalue(callback, key, value, Vector2.new(metrics.barWidth, value.Y))
             end
         end
     end
 end
 
--- A UISizeConstraint can leave Size looking large while AbsoluteSize (the
--- value used by the reel collision test) remains capped. Detach only the
--- constraints inside playerbar while the reel exists, and restore on disable.
-local function detachPlayerBarConstraints(playerBar, entry)
-    for _, item in ipairs(playerBar:GetDescendants()) do
-        if item:IsA("UISizeConstraint") and entry.constraints[item] == nil then
-            entry.constraints[item] = item.Parent
-            item.Parent = nil
-        end
+local function addCandidate(candidates, callback, allowTargetProbe)
+    if type(callback) ~= "function" then return end
+    if candidates[callback] == nil or allowTargetProbe then
+        candidates[callback] = allowTargetProbe == true
     end
 end
 
-local function enforcePlayerBar(playerBar)
-    if not playerBar or not playerBar:IsA("GuiObject") then return false end
-    local existing = activeReelBars[playerBar]
-    if existing then
-        existing.apply()
+local function collectSignalCallbacks(candidates, signal)
+    if type(getConnections) ~= "function" then return end
+    local ok, connections = pcall(getConnections, signal)
+    if not ok or type(connections) ~= "table" then return end
+    for _, connection in ipairs(connections) do
+        local callback
+        pcall(function() callback = connection.Function or connection.Callback end)
+        addCandidate(candidates, callback, true)
+    end
+end
+
+local function patchInternalReelController(reel, bar, playerBar)
+    if reelPatch.reel ~= reel then
+        restoreReelControl()
+        reelPatch.reel = reel
+    end
+    local now = os.clock()
+    if reelPatch.applied > 0 then
+        enforceRememberedReelValues()
         return true
     end
+    if reelPatch.attempts >= 6 then return false end
+    if now - reelPatch.lastScan < 0.25 then return false end
+    reelPatch.lastScan = now
+    reelPatch.attempts = reelPatch.attempts + 1
 
-    local entry = {
-        originalSize = playerBar.Size,
-        constraints = {},
-        connections = {},
-        applying = false,
+    local barWidth = bar.AbsoluteSize.X
+    local playerWidth = playerBar.AbsoluteSize.X
+    local widthScale = playerBar.Size.X.Scale
+    local widthRatio = barWidth > 0 and playerWidth / barWidth or widthScale
+    local metrics = {
+        barWidth = barWidth,
+        playerWidth = playerWidth,
+        widthScale = widthScale,
+        widthRatio = widthRatio,
+        tolerance = math.max(0.002, math.abs(widthRatio) * 0.025),
+        playerSize = playerBar.Size,
     }
-    activeReelBars[playerBar] = entry
+    local candidates = {}
 
-    local function apply()
-        if entry.applying or not Runtime.alive or not State.autoFish or not State.autoReel then return end
-        if not playerBar.Parent then return end
-        entry.applying = true
-        detachPlayerBarConstraints(playerBar, entry)
-        if playerBar.Size ~= BLACKHUB_PLAYERBAR_SIZE then
-            playerBar.Size = BLACKHUB_PLAYERBAR_SIZE
+    collectSignalCallbacks(candidates, RunService.RenderStepped)
+    collectSignalCallbacks(candidates, RunService.Heartbeat)
+    pcall(function() collectSignalCallbacks(candidates, RunService.PreRender) end)
+
+    if type(getScriptEnvironment) == "function" then
+        for _, owner in ipairs(reelPlayerGui:GetDescendants()) do
+            if owner:IsA("LocalScript") and reelOwnedScript(owner, reel) then
+                local ok, environment = pcall(getScriptEnvironment, owner)
+                if ok and type(environment) == "table" then
+                    for _, value in pairs(environment) do addCandidate(candidates, value, true) end
+                end
+            end
         end
-        entry.applying = false
     end
-    entry.apply = apply
 
-    entry.connections[#entry.connections + 1] = playerBar:GetPropertyChangedSignal("Size"):Connect(apply)
-    entry.connections[#entry.connections + 1] = playerBar.DescendantAdded:Connect(function(item)
-        if item:IsA("UISizeConstraint") then apply() end
-    end)
-    entry.connections[#entry.connections + 1] = playerBar.AncestryChanged:Connect(function()
-        if not playerBar:IsDescendantOf(reelPlayerGui) then
-            disconnectReelBar(playerBar, false)
+    if type(getGarbage) == "function" and (reelPatch.attempts == 1 or reelPatch.attempts == 4) then
+        local ok, objects = pcall(getGarbage, true)
+        if ok and type(objects) == "table" then
+            local targets = {[reel] = true, [bar] = true, [playerBar] = true}
+            for index = 1, math.min(#objects, 12000) do
+                local object = objects[index]
+                if type(object) == "function" then
+                    addCandidate(candidates, object, false)
+                elseif type(object) == "table" and valueContainsTarget(object, targets, 2) then
+                    patchNamedControllerTable(object, metrics, 3)
+                end
+            end
         end
-    end)
-    apply()
-    return true
-end
+    end
 
-local function restoreReelControl()
-    local bars = {}
-    for playerBar in pairs(activeReelBars) do bars[#bars + 1] = playerBar end
-    for _, playerBar in ipairs(bars) do disconnectReelBar(playerBar, true) end
+    for callback, allowTargetProbe in pairs(candidates) do
+        patchControllerFunction(callback, reel, bar, playerBar, metrics, allowTargetProbe)
+    end
+    if reelPatch.applied > 0 and not reelPatch.reported then
+        reelPatch.reported = true
+        log("internal reel controller patched: " .. tostring(reelPatch.applied) .. " captured gameplay value(s)")
+    end
+    return reelPatch.applied > 0
 end
 
 local function normalReel(reelGui)
     local playerGui = player:FindFirstChildOfClass("PlayerGui")
     local reel = reelGui or (playerGui and playerGui:FindFirstChild("reel"))
-    if not reel then return false end
+    if not reel then
+        if reelPatch.reel then restoreReelControl() end
+        return false
+    end
     if normalize(reel.Name) ~= "reel" or not reel:IsA("ScreenGui") then return false end
-
     local bar = reel:FindFirstChild("bar")
-    if not bar then return true end
-    local playerBar = bar:FindFirstChild("playerbar")
-    if playerBar then enforcePlayerBar(playerBar) end
+    local playerBar = bar and bar:FindFirstChild("playerbar")
+    if bar and playerBar and playerBar:IsA("GuiObject") then
+        patchInternalReelController(reel, bar, playerBar)
+    end
     return true
 end
 
--- Catch both GUI construction orders: reel-first and playerbar-first.
 connect(reelPlayerGui.ChildAdded, function(child)
-    if Runtime.alive and State.autoFish and State.autoReel then
-        normalReel(child)
-    end
-end)
-connect(reelPlayerGui.DescendantAdded, function(descendant)
-    if not (Runtime.alive and State.autoFish and State.autoReel) then return end
-    if not descendant:IsA("GuiObject") or normalize(descendant.Name) ~= "playerbar" then return end
-    local bar = descendant.Parent
-    local reel = bar and bar.Parent
-    if bar and normalize(bar.Name) == "bar" and reel and reel:IsA("ScreenGui") and normalize(reel.Name) == "reel" then
-        enforcePlayerBar(descendant)
-    end
+    if Runtime.alive and State.autoFish and State.autoReel then normalReel(child) end
 end)
 
 local function sellAll()
@@ -623,7 +862,7 @@ addToggle("autoFish", "Master Auto Fish")
 addToggle("autoEquip", "Auto Equip Rod")
 addToggle("autoCast", "Auto Cast")
 addToggle("autoShake", "Auto Shake")
-addToggle("autoReel", "Auto Reel (BlackHub big bar)")
+addToggle("autoReel", "Auto Reel (internal max bar)")
 addNumber("castPower", "Cast power", 1, 100)
 addNumber("castInterval", "Recast delay (seconds)", 0.5, 15)
 addNumber("shakeInterval", "Shake interval (seconds)", 0.08, 0.5)
@@ -651,7 +890,7 @@ addButton("Run Diagnostics", function()
     log("rod: " .. (rod and fullName(rod) or "not found"))
     log("cast remote: " .. (findCastRemote(rod) and fullName(findCastRemote(rod)) or "not found"))
     log("cast method: normal held primary input")
-    log("reel method: persistent BlackHub playerbar size with UI size caps detached")
+    log("reel method: live LocalScript controller width/hitbox state; no cosmetic GUI edit")
     log("reel completion method: normal game reeling; no finish remote")
     log("sell-all remote: " .. (findRemote({"sellall", "SellAll", "sellallfish", "SellAllFish", "sellallitems", "SellAllItems"}, true) and "found" or "not found"))
     setStatus("Diagnostics written to " .. LOG_FILE)
@@ -725,7 +964,7 @@ task.spawn(function()
                 local reeling = State.autoReel and normalReel() or false
                 local button = not reeling and State.autoShake and shakeButton() or nil
                 if reeling then
-                    setStatus("Auto Fish: reeling normally")
+                    setStatus(reelPatch.applied > 0 and "Auto Fish: internal max bar active" or "Auto Fish: finding reel controller")
                 elseif button and now - lastShake >= State.shakeInterval then
                     lastShake = now
                     clickGuiButton(button)
