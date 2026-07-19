@@ -21,7 +21,7 @@ if type(old) == "table" and type(old.Unload) == "function" then
     pcall(old.Unload)
 end
 
-local Runtime = {alive = true, connections = {}, version = "1.0.4-blackhub-reel-lifecycle"}
+local Runtime = {alive = true, connections = {}, version = "1.0.5-blackhub-functional-control"}
 env.__BLACKHUB_RECONSTRUCTED = Runtime
 
 local ROOT = "BlackHubReconstructed"
@@ -336,12 +336,176 @@ end
 -- installed when the reel GUI enters PlayerGui, before the reel LocalScript
 -- snapshots AbsoluteSize for its control/collision calculations.
 local BLACKHUB_PLAYERBAR_SIZE = UDim2.new(1, 0, 1.3, 0)
+local BLACKHUB_REEL_CONTROL = 0.7
+
+-- The reel controller derives its real collision width from the equipped
+-- rod's Control stat before it creates playerbar. Resizing playerbar after
+-- that calculation only changes the picture, not the catch region.
+local reelTablePatches = setmetatable({}, {__mode = "k"})
+local reelInstancePatches = setmetatable({}, {__mode = "k"})
+local lastControlScan = 0
+local lastControlRod
+local lastControlPatched = false
+
+local function writeTableField(target, key, value)
+    local wasReadonly = false
+    if type(isreadonly) == "function" then
+        local ok, result = pcall(isreadonly, target)
+        wasReadonly = ok and result == true
+    end
+    if wasReadonly and type(setreadonly) == "function" then pcall(setreadonly, target, false) end
+    local ok = pcall(function() target[key] = value end)
+    if wasReadonly and type(setreadonly) == "function" then pcall(setreadonly, target, true) end
+    return ok
+end
+
+local function patchControlTable(target)
+    if type(target) ~= "table" then return false end
+    local controlKey
+    for key, value in pairs(target) do
+        if type(key) == "string" and normalize(key) == "control" and type(value) == "number" then
+            controlKey = key
+            break
+        end
+    end
+    if controlKey == nil then return false end
+
+    local saved = reelTablePatches[target]
+    if not saved then
+        saved = {}
+        reelTablePatches[target] = saved
+    end
+    if saved[controlKey] == nil then saved[controlKey] = target[controlKey] end
+    return writeTableField(target, controlKey, BLACKHUB_REEL_CONTROL)
+end
+
+local function rodAliases(rod)
+    local aliases = {[normalize(rod.Name)] = true}
+    for key, value in pairs(rod:GetAttributes()) do
+        if type(value) == "string" then
+            local n = normalize(key)
+            if n == "name" or n == "rod" or n == "rodname" or n == "item" or n == "itemname" or n == "id" then
+                aliases[normalize(value)] = true
+            end
+        end
+    end
+    for _, item in ipairs(rod:GetDescendants()) do
+        if item:IsA("StringValue") then
+            local n = normalize(item.Name)
+            if n == "name" or n == "rod" or n == "rodname" or n == "item" or n == "itemname" or n == "id" then
+                aliases[normalize(item.Value)] = true
+            end
+        elseif item:IsA("ObjectValue") and normalize(item.Name) == "link" and item.Value then
+            aliases[normalize(item.Value.Name)] = true
+        end
+    end
+    return aliases
+end
+
+local function patchRodInstances(rod)
+    local patched = false
+    local items = {rod}
+    for _, item in ipairs(rod:GetDescendants()) do items[#items + 1] = item end
+    for _, item in ipairs(items) do
+        if item:IsA("NumberValue") and normalize(item.Name) == "control" then
+            if reelInstancePatches[item] == nil then reelInstancePatches[item] = {kind = "value", value = item.Value} end
+            item.Value = BLACKHUB_REEL_CONTROL
+            patched = true
+        end
+        for key, value in pairs(item:GetAttributes()) do
+            if normalize(key) == "control" and type(value) == "number" then
+                local saved = reelInstancePatches[item]
+                if not saved then saved = {kind = "attributes"}; reelInstancePatches[item] = saved end
+                if saved[key] == nil then saved[key] = value end
+                item:SetAttribute(key, BLACKHUB_REEL_CONTROL)
+                patched = true
+            end
+        end
+    end
+    return patched
+end
+
+local function patchRodData(rod)
+    if not rod then return false end
+    local patched = patchRodInstances(rod)
+    if type(getgc) ~= "function" then return patched end
+
+    local aliases = rodAliases(rod)
+    local seen = {}
+    local visited = 0
+    local function scan(value, depth)
+        if type(value) ~= "table" or seen[value] or depth > 4 or visited >= 20000 then return end
+        seen[value] = true
+        visited += 1
+
+        local namedForRod = false
+        for key, child in pairs(value) do
+            if type(key) == "string" and aliases[normalize(key)] and type(child) == "table" then
+                patched = patchControlTable(child) or patched
+            end
+            if type(key) == "string" and type(child) == "string" then
+                local n = normalize(key)
+                if (n == "name" or n == "rodname" or n == "itemname" or n == "id") and aliases[normalize(child)] then
+                    namedForRod = true
+                end
+            end
+        end
+        if namedForRod then patched = patchControlTable(value) or patched end
+        for _, child in pairs(value) do
+            if type(child) == "table" then scan(child, depth + 1) end
+        end
+    end
+
+    local ok, objects = pcall(getgc, true)
+    if not ok or type(objects) ~= "table" then return patched end
+    for _, object in ipairs(objects) do
+        if type(object) == "table" then scan(object, 0) end
+        if visited >= 20000 then break end
+    end
+    return patched
+end
+
+local function restoreReelControl()
+    for target, fields in pairs(reelTablePatches) do
+        for key, value in pairs(fields) do writeTableField(target, key, value) end
+    end
+    table.clear(reelTablePatches)
+    for item, saved in pairs(reelInstancePatches) do
+        if item.Parent then
+            if saved.kind == "value" then
+                pcall(function() item.Value = saved.value end)
+            else
+                for key, value in pairs(saved) do
+                    if key ~= "kind" then pcall(item.SetAttribute, item, key, value) end
+                end
+            end
+        end
+    end
+    table.clear(reelInstancePatches)
+    lastControlRod = nil
+    lastControlScan = 0
+    lastControlPatched = false
+end
+
+local function functionalReelControl(rod, force)
+    rod = rod or equippedRod()
+    if not rod then return false end
+    local now = os.clock()
+    if not force and rod == lastControlRod and lastControlPatched then return true end
+    if not force and rod == lastControlRod and now - lastControlScan < 1 then return false end
+    lastControlRod = rod
+    lastControlScan = now
+    lastControlPatched = patchRodData(rod)
+    return lastControlPatched
+end
 
 local function normalReel(reelGui)
     local playerGui = player:FindFirstChildOfClass("PlayerGui")
     local reel = reelGui or (playerGui and playerGui:FindFirstChild("reel"))
     if not reel then return false end
     if normalize(reel.Name) ~= "reel" or not reel:IsA("ScreenGui") then return false end
+
+    functionalReelControl(nil, false)
 
     local bar = reel:FindFirstChild("bar")
     if not bar then return true end
@@ -359,6 +523,7 @@ end
 local reelPlayerGui = player:WaitForChild("PlayerGui")
 connect(reelPlayerGui.ChildAdded, function(child)
     if Runtime.alive and State.autoFish and State.autoReel then
+        functionalReelControl(nil, true)
         normalReel(child)
     end
 end)
@@ -497,6 +662,9 @@ local toggleRefresh = {}
 local function addToggle(key, text)
     local button = addButton("", function()
         State[key] = not State[key]
+        if (key == "autoReel" or key == "autoFish") and (not State.autoReel or not State.autoFish) then
+            restoreReelControl()
+        end
         saveConfig()
         toggleRefresh[key]()
         setStatus(text .. ": " .. (State[key] and "ON" or "OFF"))
@@ -578,7 +746,8 @@ addButton("Run Diagnostics", function()
     log("rod: " .. (rod and fullName(rod) or "not found"))
     log("cast remote: " .. (findCastRemote(rod) and fullName(findCastRemote(rod)) or "not found"))
     log("cast method: normal held primary input")
-    log("reel method: BlackHub early lifecycle control-bar sizing")
+    log("reel method: equipped-rod Control=0.7 before reel + BlackHub playerbar size")
+    log("functional control target: " .. (lastControlPatched and "patched" or "not yet located"))
     log("sell-all remote: " .. (findRemote({"sellall", "SellAll", "sellallfish", "SellAllFish", "sellallitems", "SellAllItems"}, true) and "found" or "not found"))
     setStatus("Diagnostics written to " .. LOG_FILE)
 end)
@@ -610,6 +779,7 @@ function Runtime.Unload()
     saveConfig()
     for _, connection in ipairs(Runtime.connections) do pcall(connection.Disconnect, connection) end
     table.clear(Runtime.connections)
+    restoreReelControl()
     setPrimaryInput(false)
     if renderingDisabled then pcall(RunService.Set3dRenderingEnabled, RunService, true) end
     if gui then pcall(gui.Destroy, gui) end
@@ -646,6 +816,8 @@ task.spawn(function()
             local ok, err = pcall(function()
                 local rod = equippedRod()
                 if not rod and State.autoEquip then rod = equipRod() end
+
+                if State.autoReel and rod then functionalReelControl(rod, false) end
 
                 local reeling = State.autoReel and normalReel() or false
                 local button = not reeling and State.autoShake and shakeButton() or nil
