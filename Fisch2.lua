@@ -21,7 +21,7 @@ if type(old) == "table" and type(old.Unload) == "function" then
     pcall(old.Unload)
 end
 
-local Runtime = {alive = true, connections = {}, version = "1.0.0-phase1"}
+local Runtime = {alive = true, connections = {}, version = "1.0.1-fishing-fix"}
 env.__BLACKHUB_RECONSTRUCTED = Runtime
 
 local ROOT = "BlackHubReconstructed"
@@ -33,23 +33,14 @@ local defaults = {
     autoEquip = true,
     autoCast = true,
     autoShake = true,
-    instantReel = true,
+    autoReel = true,
     autoSell = false,
     antiAfk = true,
-    zoneCasting = false,
-    walkSpeedToggle = false,
-    walkSpeedValue = 32,
-    jumpPowerToggle = false,
-    jumpPowerValue = 75,
-    flyToggle = false,
-    flySpeed = 45,
-    freezePosition = false,
     disableRendering = false,
     castPower = 100,
-    castInterval = 12,
-    reelDelay = 0.15,
+    castInterval = 2,
+    shakeInterval = 0.12,
     sellInterval = 300,
-    savedZone = nil,
 }
 
 local State = {}
@@ -92,7 +83,11 @@ local function loadConfig()
             State[key] = saved[key]
         end
     end
-    if type(saved.savedZone) == "table" then State.savedZone = saved.savedZone end
+    -- Migrate phase-1 configs to the corrected fishing timings and reel controller.
+    if saved.autoReel == nil then
+        State.autoReel = true
+        State.castInterval = defaults.castInterval
+    end
 end
 
 loadConfig()
@@ -223,6 +218,32 @@ local function findCastRemote(rod)
     end
 end
 
+local primaryInputDown = false
+local function setPrimaryInput(down)
+    if primaryInputDown == down then return true end
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(2, 2)
+    local ok = pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(viewport.X / 2, viewport.Y / 2, 0, down, game, 0)
+    end)
+    if ok then primaryInputDown = down end
+    return ok
+end
+
+local function castPowerBar()
+    local char = character()
+    if not char then return nil end
+    for _, item in ipairs(char:GetDescendants()) do
+        if item:IsA("GuiObject") and normalize(item.Name) == "bar" then
+            local parent = item.Parent
+            local grandparent = parent and parent.Parent
+            local parentName = parent and normalize(parent.Name) or ""
+            local grandparentName = grandparent and normalize(grandparent.Name) or ""
+            if parentName == "powerbar" or grandparentName == "powerbar" then return item end
+        end
+    end
+end
+
 local function hasBobber(rod)
     if not rod then return false end
     for _, item in ipairs(rod:GetDescendants()) do
@@ -241,14 +262,26 @@ end
 local function cast()
     local rod = equippedRod() or (State.autoEquip and equipRod())
     if not rod then return false, "no rod found" end
-    local remote = findCastRemote(rod)
-    if remote then
-        local ok, err = callRemote(remote, State.castPower)
-        if ok then return true end
-        return false, err
-    end
-    local ok, err = pcall(rod.Activate, rod)
-    return ok, err
+    if not setPrimaryInput(true) then return false, "primary input unavailable" end
+
+    local started = os.clock()
+    local targetPower = math.clamp(State.castPower / 100, 0.01, 1)
+    local fallbackHold = 0.25 + (1.25 * targetPower)
+    local sawPowerBar = false
+
+    repeat
+        task.wait(0.025)
+        local bar = castPowerBar()
+        if bar then
+            sawPowerBar = true
+            if bar.Size.X.Scale >= targetPower - 0.01 then break end
+        elseif not sawPowerBar and os.clock() - started >= fallbackHold then
+            break
+        end
+    until os.clock() - started >= 2.25 or not Runtime.alive or not State.autoFish or not State.autoCast
+
+    setPrimaryInput(false)
+    return true
 end
 
 local function visibleGuiNamed(fragment)
@@ -299,14 +332,20 @@ local function clickGuiButton(button)
     end)
 end
 
-local function reelVisible()
-    return visibleGuiNamed("reel") ~= nil
-end
+local function normalReel()
+    local playerGui = player:FindFirstChildOfClass("PlayerGui")
+    local reel = playerGui and playerGui:FindFirstChild("reel")
+    if not reel then return false end
 
-local function finishReel()
-    local remote = findRemote({"reelfinished", "ReelFinished", "reel_finished", "reelfinished "}, false)
-    if not remote then return false, "ReelFinished remote not found" end
-    return callRemote(remote, 100, true)
+    local bar = reel:FindFirstChild("bar")
+    if not bar then return true end
+    local playerBar = bar:FindFirstChild("playerbar")
+    local fish = bar:FindFirstChild("fish")
+    if playerBar and fish and playerBar:IsA("GuiObject") and fish:IsA("GuiObject") then
+        -- Let the normal client minigame progress; never complete it through a server remote.
+        playerBar.Position = fish.Position
+    end
+    return true
 end
 
 local function sellAll()
@@ -314,66 +353,6 @@ local function sellAll()
     local remote = findRemote({"sellall", "SellAll", "sellallfish", "SellAllFish", "sellallitems", "SellAllItems"}, true)
     if not remote then return false, "sell-all remote not found" end
     return callRemote(remote)
-end
-
-local function rootPart()
-    local char = character()
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function saveZone()
-    local root = rootPart()
-    if not root then return false end
-    local p = root.Position
-    local l = root.CFrame.LookVector
-    State.savedZone = {p.X, p.Y, p.Z, l.X, l.Y, l.Z}
-    saveConfig()
-    log(string.format("saved zone at %.1f, %.1f, %.1f", p.X, p.Y, p.Z))
-    return true
-end
-
-local function teleportSavedZone()
-    local data = State.savedZone
-    local root = rootPart()
-    if not root or type(data) ~= "table" or #data < 6 then return false end
-    local position = Vector3.new(data[1], data[2], data[3])
-    local look = Vector3.new(data[4], data[5], data[6])
-    root.CFrame = CFrame.lookAt(position, position + look)
-    return true
-end
-
-local function savedZoneCFrame()
-    local data = State.savedZone
-    if type(data) ~= "table" or #data < 6 then return nil end
-    local position = Vector3.new(data[1], data[2], data[3])
-    local look = Vector3.new(data[4], data[5], data[6])
-    return CFrame.lookAt(position, position + look)
-end
-
-local function moveBobberToSavedZone(rod)
-    local target = savedZoneCFrame()
-    if not target then return false, "save a zone position first" end
-    local root = rootPart()
-    local best, bestDistance
-    local function consider(item)
-        if not item:IsA("BasePart") then return end
-        local n = normalize(item.Name)
-        if n ~= "bobber" and n ~= "float" then return end
-        local distance = root and (item.Position - root.Position).Magnitude or 0
-        if not bestDistance or distance < bestDistance then best, bestDistance = item, distance end
-    end
-    if rod then
-        for _, item in ipairs(rod:GetDescendants()) do consider(item) end
-    end
-    if not best then
-        for _, item in ipairs(workspace:GetDescendants()) do consider(item) end
-    end
-    if not best then return false, "bobber not found" end
-    local ok, err = pcall(function()
-        best.AssemblyLinearVelocity = Vector3.zero
-        best.CFrame = target + Vector3.new(0, -2, 0)
-    end)
-    return ok, err
 end
 
 -- Small standalone UI: no remote loadstring and no UI-library dependency.
@@ -547,11 +526,10 @@ addToggle("autoFish", "Master Auto Fish")
 addToggle("autoEquip", "Auto Equip Rod")
 addToggle("autoCast", "Auto Cast")
 addToggle("autoShake", "Auto Shake")
-addToggle("instantReel", "Instant Reel")
-addToggle("zoneCasting", "Zone Casting (uses saved position)")
+addToggle("autoReel", "Auto Reel (normal minigame)")
 addNumber("castPower", "Cast power", 1, 100)
-addNumber("castInterval", "Recast timeout (seconds)", 3, 60)
-addNumber("reelDelay", "Reel delay (seconds)", 0, 5)
+addNumber("castInterval", "Recast delay (seconds)", 0.5, 15)
+addNumber("shakeInterval", "Shake interval (seconds)", 0.08, 0.5)
 
 addLabel("SELLING")
 addToggle("autoSell", "Auto Sell All")
@@ -562,22 +540,7 @@ addButton("Sell All Now", function()
     if not ok then log("sell failed: " .. tostring(err)) end
 end)
 
-addLabel("POSITION / ZONE")
-addButton("Save Current Position", function()
-    setStatus(saveZone() and "Zone position saved" or "Character not ready")
-end)
-addButton("Teleport To Saved Position", function()
-    setStatus(teleportSavedZone() and "Teleported" or "No saved position")
-end)
-
-addLabel("PLAYER")
-addToggle("walkSpeedToggle", "Walk Speed")
-addNumber("walkSpeedValue", "Walk speed value", 16, 250)
-addToggle("jumpPowerToggle", "Jump Power")
-addNumber("jumpPowerValue", "Jump power value", 50, 250)
-addToggle("flyToggle", "Fly")
-addNumber("flySpeed", "Fly speed", 10, 250)
-addToggle("freezePosition", "Freeze Position")
+addLabel("DISPLAY")
 addToggle("disableRendering", "Disable 3D Rendering")
 
 addLabel("RUNTIME")
@@ -590,7 +553,8 @@ addButton("Run Diagnostics", function()
     log("executor: " .. tostring(identifyexecutor and identifyexecutor() or "unknown"))
     log("rod: " .. (rod and fullName(rod) or "not found"))
     log("cast remote: " .. (findCastRemote(rod) and fullName(findCastRemote(rod)) or "not found"))
-    log("reel remote: " .. (findRemote({"reelfinished", "ReelFinished", "reel_finished"}, false) and "found" or "not found"))
+    log("cast method: normal held primary input")
+    log("reel method: normal playerbar tracking (no finish remote)")
     log("sell-all remote: " .. (findRemote({"sellall", "SellAll", "sellallfish", "SellAllFish", "sellallitems", "SellAllItems"}, true) and "found" or "not found"))
     setStatus("Diagnostics written to " .. LOG_FILE)
 end)
@@ -598,14 +562,7 @@ addButton("Unload", function() Runtime.Unload() end)
 
 -- Dragging works with touch and mouse.
 local dragging, dragStart, startPosition
-local modifiedHumanoids = setmetatable({}, {__mode = "k"})
-local flightVelocity
-local flightGyro
-local wasFrozen = false
-local frozenRoot
-local frozenRootWasAnchored = false
 local renderingDisabled = false
-local removeFlight
 connect(top.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
@@ -629,15 +586,7 @@ function Runtime.Unload()
     saveConfig()
     for _, connection in ipairs(Runtime.connections) do pcall(connection.Disconnect, connection) end
     table.clear(Runtime.connections)
-    for hum, original in pairs(modifiedHumanoids or {}) do
-        if hum and hum.Parent then
-            pcall(function() hum.WalkSpeed = original.walkSpeed; hum.JumpPower = original.jumpPower end)
-        end
-    end
-    removeFlight()
-    if frozenRoot and frozenRoot.Parent and wasFrozen then
-        pcall(function() frozenRoot.Anchored = frozenRootWasAnchored end)
-    end
+    setPrimaryInput(false)
     if renderingDisabled then pcall(RunService.Set3dRenderingEnabled, RunService, true) end
     if gui then pcall(gui.Destroy, gui) end
     if env.__BLACKHUB_RECONSTRUCTED == Runtime then env.__BLACKHUB_RECONSTRUCTED = nil end
@@ -656,78 +605,10 @@ connect(player.Idled, function()
 end)
 
 local nextCast = 0
-local lastReel = 0
+local lastShake = 0
 local nextSell = os.clock() + State.sellInterval
 local lastError = ""
-removeFlight = function()
-    if flightVelocity then pcall(flightVelocity.Destroy, flightVelocity); flightVelocity = nil end
-    if flightGyro then pcall(flightGyro.Destroy, flightGyro); flightGyro = nil end
-end
-
-local function updatePlayerMods()
-    local hum = humanoid()
-    local root = rootPart()
-    if hum then
-        if not modifiedHumanoids[hum] then
-            modifiedHumanoids[hum] = {
-                walkSpeed = hum.WalkSpeed,
-                jumpPower = hum.JumpPower,
-                walkApplied = false,
-                jumpApplied = false,
-            }
-        end
-        local original = modifiedHumanoids[hum]
-        if State.walkSpeedToggle then
-            hum.WalkSpeed = State.walkSpeedValue
-            original.walkApplied = true
-        elseif original.walkApplied then
-            hum.WalkSpeed = original.walkSpeed
-            original.walkApplied = false
-        end
-        if State.jumpPowerToggle then
-            hum.UseJumpPower = true
-            hum.JumpPower = State.jumpPowerValue
-            original.jumpApplied = true
-        elseif original.jumpApplied then
-            hum.JumpPower = original.jumpPower
-            original.jumpApplied = false
-        end
-    end
-
-    if root then
-        if State.freezePosition ~= wasFrozen then
-            if State.freezePosition then
-                frozenRoot = root
-                frozenRootWasAnchored = root.Anchored
-            end
-            root.Anchored = State.freezePosition
-            if not State.freezePosition and frozenRoot == root then root.Anchored = frozenRootWasAnchored end
-            wasFrozen = State.freezePosition
-        end
-        if State.flyToggle then
-            if not flightVelocity or flightVelocity.Parent ~= root then
-                removeFlight()
-                flightVelocity = Instance.new("BodyVelocity")
-                flightVelocity.Name = "BH_Reconstructed_FlightVelocity"
-                flightVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                flightVelocity.Parent = root
-                flightGyro = Instance.new("BodyGyro")
-                flightGyro.Name = "BH_Reconstructed_FlightGyro"
-                flightGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-                flightGyro.P = 9000
-                flightGyro.Parent = root
-            end
-            local direction = hum and hum.MoveDirection or Vector3.zero
-            flightVelocity.Velocity = direction * State.flySpeed
-            local camera = workspace.CurrentCamera
-            if camera then flightGyro.CFrame = CFrame.lookAt(root.Position, root.Position + camera.CFrame.LookVector) end
-        else
-            removeFlight()
-        end
-    else
-        removeFlight()
-    end
-
+local function updateRendering()
     if State.disableRendering ~= renderingDisabled then
         renderingDisabled = State.disableRendering
         pcall(RunService.Set3dRenderingEnabled, RunService, not renderingDisabled)
@@ -742,34 +623,19 @@ task.spawn(function()
                 local rod = equippedRod()
                 if not rod and State.autoEquip then rod = equipRod() end
 
-                local button = State.autoShake and shakeButton() or nil
-                if button then
+                local reeling = State.autoReel and normalReel() or false
+                local button = not reeling and State.autoShake and shakeButton() or nil
+                if reeling then
+                    setStatus("Auto Fish: reeling normally")
+                elseif button and now - lastShake >= State.shakeInterval then
+                    lastShake = now
                     clickGuiButton(button)
                     setStatus("Auto Fish: shaking")
-                elseif State.instantReel and reelVisible() and now - lastReel >= math.max(State.reelDelay, 0.1) then
-                    lastReel = now
-                    local reelOk, reelErr = finishReel()
-                    if reelOk then
-                        nextCast = now + 1.2
-                        setStatus("Auto Fish: reel finished")
-                    else
-                        error(reelErr)
-                    end
                 elseif State.autoCast and rod and now >= nextCast and not hasBobber(rod) then
                     local castOk, castErr = cast()
                     nextCast = now + State.castInterval
                     if castOk then
                         setStatus("Auto Fish: cast sent")
-                        if State.zoneCasting then
-                            task.spawn(function()
-                                for _ = 1, 8 do
-                                    if not Runtime.alive or not State.zoneCasting then return end
-                                    task.wait(0.25)
-                                    local moved = moveBobberToSavedZone(rod)
-                                    if moved then setStatus("Auto Fish: zone cast positioned"); return end
-                                end
-                            end)
-                        end
                     else error(castErr) end
                 end
             end)
@@ -789,11 +655,11 @@ task.spawn(function()
         elseif not State.autoSell then
             nextSell = now + State.sellInterval
         end
-        local modsOk, modsErr = pcall(updatePlayerMods)
-        if not modsOk and tostring(modsErr) ~= lastError then log("player mods: " .. tostring(modsErr)) end
-        task.wait(0.08)
+        local renderOk, renderErr = pcall(updateRendering)
+        if not renderOk and tostring(renderErr) ~= lastError then log("render setting: " .. tostring(renderErr)) end
+        task.wait(0.05)
     end
 end)
 
 log("started version " .. Runtime.version)
-setStatus("Ready • enable Master Auto Fish")
+setStatus("Ready - enable Master Auto Fish")
